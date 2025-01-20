@@ -8,9 +8,6 @@ import argparse
 def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
 
-
-
-
     args = p.parse_args()
     return args
 
