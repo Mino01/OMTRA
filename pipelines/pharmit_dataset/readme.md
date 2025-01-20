@@ -121,61 +121,23 @@ Hydrophobic -2.8794 0.0957 1.4783
 $$$$
 ```
 
-So we have to write code to parse the pharmacophore information out of the sdf files, too. I had chatgpt write a script to do this. It's slightly incorrect; some of the pharmacophores have 3 floats and then subsequent floats in brackets. I don't know what these mean, they may be important. But this code will only take the first 3 floats.
+So we have to write code to parse the pharmacophore information out of the sdf files, too. 
+
+# Metadata
+
+For a given molecule, we need to retrieve its "name" from the pharmit database. Its name will contain the screening library from which this molecule was obtained. This is useful training data, so we want to fetch it. Retrieving the name requires we run a sql query against the pharmit database, which is running on jabba. 
+
+The unique identifier for a moleule in the database will be its smiles string. Nice! Then we find all "names" in the database where the smiles string is our smiles of interest. The code snippet below, [extracted from this script](https://github.com/dkoes/pharmit/blob/master/scripts/extractsubset.py), will do this for us:
 
 ```python
-def parse_pharmacophore_data(pharmacophore_data):
-    """
-    Parses pharmacophore data into a dictionary.
-    Args:
-        pharmacophore_data (str): Raw pharmacophore data as a string.
-
-    Returns:
-        dict: Parsed pharmacophore data with types as keys and lists of tuples as values.
-    """
-    parsed_data = {}
-    lines = pharmacophore_data.splitlines()
-
-    for line in lines:
-        parts = line.split()
-        if len(parts) >= 4:
-            key = parts[0]  # Pharmacophore type
-            try:
-                coordinates = tuple(map(float, parts[1:4]))  # Extract the 3 float values
-                print(line)
-                print(coordinates)
-                if key not in parsed_data:
-                    parsed_data[key] = []
-                parsed_data[key].append(coordinates)
-            except ValueError:
-                print(f"Skipping line due to parsing error: {line}")
-
-    return parsed_data
-
-def read_sdf_and_print_pharmacophore(file_path):
-    # Open and read the SDF file
-    suppl = Chem.SDMolSupplier(file_path)
-
-    if not suppl:
-        print("Failed to read the SDF file.")
-        return
-
-    for mol in suppl:
-        if mol is None:
-            print("Failed to parse a molecule.")
-            continue
-
-        # Retrieve the pharmacophore data from the molecule properties
-        pharmacophore_data = mol.GetProp("pharmacophore") if mol.HasProp("pharmacophore") else None
-
-        if pharmacophore_data:
-            print("Raw Pharmacophore Data:")
-            print(pharmacophore_data)
-
-            # Parse the pharmacophore data into a dictionary
-            parsed_data = parse_pharmacophore_data(pharmacophore_data)
-            print("Parsed Pharmacophore Data:")
-            print(parsed_data)
-        else:
-            print("No pharmacophore data found in the molecule.")
+        #get all names
+        cursor.execute("SELECT name FROM names WHERE smile = %s", (smile,))
+        names = cursor.fetchall()
+        names = list(itertools.chain.from_iterable(names)) 
+        bigname =' '.join(sortNames(prefix,names))
+        bigname = bigname.replace('\n','')
+        print(sdfloc,i,bigname)
 ```
+
+# TODO
+A first pass implementation is available in `process_pharmit_data.py`
