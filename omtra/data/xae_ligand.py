@@ -4,7 +4,9 @@ from rdkit import Chem
 
 from multiprocessing import Pool
 
-class MoleculeFeaturizer():
+class MoleculeTensorizer():
+
+    """Class for converting RDKit molecules to tensors for use in graph neural networks."""
 
     def __init__(self, atom_map: str, n_cpus=1):
         self.n_cpus = n_cpus
@@ -102,12 +104,7 @@ def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expli
     # note that because we take the upper-triangular portion of the adjacency matrix, there is only one edge per bond
     # at training time for every edge (i,j) in edge_index, we will also add edges (j,i)
     # we also only retain existing bonds, but then at training time we will add in edges for non-existing bonds
-
     bond_types = adj[edge_index[:, 0], edge_index[:, 1]]
-
-    # count the number of pairs of atoms which are bonded
-    n_bonded_pairs = edge_index.shape[0]
-    edge_attr = bond_types
 
     # compute the number of upper-edge pairs
     atom_types = atom_types
@@ -117,4 +114,4 @@ def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expli
     atom_charges = atom_charges.type(np.int32)
     edge_attr = bond_types.type(np.int32)
 
-    return positions, atom_types, atom_charges, edge_attr, edge_index, #  bond_order_counts
+    return positions, atom_types, atom_charges, edge_attr, edge_index, 
