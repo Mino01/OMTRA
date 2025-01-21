@@ -139,12 +139,9 @@ The unique identifier for a moleule in the database will be its smiles string. N
         print(sdfloc,i,bigname)
 ```
 
-# TODO
-A first pass implementation is available in `process_pharmit_data.py`
-
 # Strategy for processing the full dataset
 
-A master script will spawn a worker process. Each worker process will chew through a single data directory. The worker will:
+A master script will crawl all conformer files and spawn worker processes, each worker process will process the conformer files. The worker will:
 1. read molecules, query database, convert to tensors
 2. in chunks, pickle tensors to disk
 3. simultaneously record the size of each chunk in a separate location
