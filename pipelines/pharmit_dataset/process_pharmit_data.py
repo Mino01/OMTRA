@@ -4,6 +4,9 @@ import gzip
 from rdkit import Chem
 import pymysql
 import itertools
+import re
+
+from omtra.data.xae_ligand import MoleculeTensorizer
 
 # TODO: this script should actually take as input just a hydra config 
 # - but Ramith is setting up our hydra stuff yet, and we don't 
@@ -14,8 +17,10 @@ def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
 
     # temporary default path for development
-    p.add_argument('--conf_file', type=Path, default='/home/icd3/OMTRA/pipelines/pharmit_dataset/tmp_conformer_inspection/100.sdf.gz')
-    p.add_argument('--skip_query', action='store_true', help='Skip querying the database for names')
+    p.add_argument('--db_dir', type=Path, default='./pharmit_small/')
+    p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
+
+    p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
 
     args = p.parse_args()
     return args
@@ -48,28 +53,59 @@ def extract_pharmacophore_data(mol):
 
     return parsed_data
 
-import re
-
-
-
 
 class NameFinder():
 
-    def __init__(self):
-        self.conn = pymysql.connect(
-            host="localhost",
-            user="pharmit", 
-            db="conformers",)
-            # password="",
-            # unix_socket="/var/run/mysqld/mysqld.sock")
-        self.cursor = self.conn.cursor()
+    def __init__(self, spoof_db=False):
+
+        if spoof_db:
+            self.conn = None
+        else:
+            self.conn = pymysql.connect(
+                host="localhost",
+                user="pharmit", 
+                db="conformers",)
+                # password="",
+                # unix_socket="/var/run/mysqld/mysqld.sock")
+            self.cursor = self.conn.cursor()
 
     def query(self, smiles: str):
+
+        if self.conn is None:
+            return ['PubChem', 'ZINC', 'MolPort']
+
         with self.conn.cursor() as cursor:
             cursor.execute("SELECT name FROM names WHERE smile = %s", (smiles,))
             names = cursor.fetchall()
         names = list(itertools.chain.from_iterable(names))
         return self.extract_prefixes(names)
+    
+    def query_batch(self, smiles_list: list[str]):
+        if self.conn is None:
+            return {smiles: ['PubChem', 'ZINC', 'MolPort'] for smiles in smiles_list}
+
+        # Ensure the input is unique to avoid unnecessary duplicates in the result
+        smiles_list = list(set(smiles_list))
+
+        with self.conn.cursor() as cursor:
+            # Use the IN clause to query multiple SMILES strings
+            query = "SELECT smile, name FROM names WHERE smile IN %s"
+            cursor.execute(query, (tuple(smiles_list),))
+            results = cursor.fetchall()
+
+        # Organize results into a dictionary: {smile: [names]}
+        smiles_to_names = {}
+        for smile, name in results:
+            if smile not in smiles_to_names:
+                smiles_to_names[smile] = []
+            smiles_to_names[smile].append(name)
+
+        # Add SMILES strings that had no matches to ensure a complete dictionary
+        for smile in smiles_list:
+            if smile not in smiles_to_names:
+                smiles_to_names[smile] = []
+
+        return {smile: self.extract_prefixes(names) for smile, names in smiles_to_names.items()}
     
     def extract_prefixes(self, names):
         """
@@ -91,32 +127,43 @@ class NameFinder():
             else:
                 continue
         return list(prefixes)
-
-if __name__ == '__main__':
-    args = parse_args()
-
-
-    # get the first conformer from the file
-    conformer_file_path = args.conf_file
-    with gzip.open(conformer_file_path, 'rb') as gzipped_sdf:
+    
+def read_mol_from_conf_file(conf_file):
+    with gzip.open(conf_file, 'rb') as gzipped_sdf:
         suppl = Chem.ForwardSDMolSupplier(gzipped_sdf)
         for mol in suppl:
             if mol is not None:
                 break
         if mol is None:
-            raise ValueError(f"Failed to parse a molecule from {conformer_file_path}")
-        
-    # extract pharmacophore data from the molecule
-    pharmacophore_data = extract_pharmacophore_data(mol)
+            raise ValueError(f"Failed to parse a molecule from {conf_file}")
+    return mol
 
-    # get smiles string
-    smiles = Chem.MolToSmiles(mol)
+if __name__ == '__main__':
+    args = parse_args()
 
-    print(f"Pharmacophore data: {pharmacophore_data}")
-    print(f"SMILES: {smiles}")
-    
-    if not args.skip_query:
-        name_finder = NameFinder()
+    mol_tensorizer = MoleculeTensorizer(atom_type_map=args.atom_type_map)
+    name_finder = NameFinder(spoof_db=args.spoof_db)
+
+    # TODO: turn into a generator instead of a list because we don't want to load all the conformer files into memory in practice
+    conformer_files = []
+    for data_dir in args.db_dir.iterdir():
+        conformers_dir = data_dir / 'conformers'
+        for conformer_subdir in conformers_dir.iterdir():
+            for conformer_file in conformer_subdir.iterdir():
+                conformer_files.append(conformer_file)
+
+    for conformer_file in conformer_files:
+        mol = read_mol_from_conf_file(conformer_file)
+        smiles = Chem.MolToSmiles(mol)
         names = name_finder.query(smiles)
-        print(f"Names: {names}")
+        pharmacophore_data = extract_pharmacophore_data(mol)
+        xae_mol = mol_tensorizer.featurize_molecules([mol])
+
+
+    # TODO: convert pharmacophore and names into tensors
+    # TODO: process molecules in batches; 
+    #     this includes using the NameFinder.query_batch method instead of NameFinder.query
+    #     MoleculeTensorizer can handle batches of molecules
+    #     but for optimial efficiency we may want to paralellize
+    # TODO: write molecules to disk in chunks
         
