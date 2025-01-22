@@ -69,7 +69,7 @@ class NameFinder():
                 # unix_socket="/var/run/mysqld/mysqld.sock")
             self.cursor = self.conn.cursor()
 
-    def query(self, smiles: str):
+    def query_name(self, smiles: str):
 
         if self.conn is None:
             return ['PubChem', 'ZINC', 'MolPort']
@@ -80,7 +80,7 @@ class NameFinder():
         names = list(itertools.chain.from_iterable(names))
         return self.extract_prefixes(names)
     
-    def query_batch(self, smiles_list: list[str]):
+    def query_name_batch(self, smiles_list: list[str]):
         if self.conn is None:
             return {smiles: ['PubChem', 'ZINC', 'MolPort'] for smiles in smiles_list}
 
@@ -128,6 +128,22 @@ class NameFinder():
                 continue
         return list(prefixes)
     
+    def query_smiles_from_file(self, conformer_file: Path):
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT smile FROM structures WHERE sdfloc = %s", (str(conformer_file),))
+            smiles = cursor.fetchall()
+        return smiles
+
+    def query_smiles_from_file_batch(self, conformer_files: list[Path]):
+        if self.conn is None:
+            return {file: 'CC' for file in conformer_files}
+
+        with self.conn.cursor() as cursor:
+            query = "SELECT sdfloc, smile FROM structures WHERE sdfloc IN %s"
+            cursor.execute(query, (tuple(str(file) for file in conformer_files),))
+            results = cursor.fetchall()
+        return {Path(sdfloc): smile for sdfloc, smile in results}
+    
 def read_mol_from_conf_file(conf_file):
     with gzip.open(conf_file, 'rb') as gzipped_sdf:
         suppl = Chem.ForwardSDMolSupplier(gzipped_sdf)
@@ -149,20 +165,25 @@ def crawl_conformer_files(db_dir: Path):
 if __name__ == '__main__':
     args = parse_args()
 
-    mol_tensorizer = MoleculeTensorizer(atom_type_map=args.atom_type_map)
+    mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
     name_finder = NameFinder(spoof_db=args.spoof_db)
 
     for conformer_file in crawl_conformer_files(args.db_dir):
         mol = read_mol_from_conf_file(conformer_file)
-        smiles = Chem.MolToSmiles(mol)
-        names = name_finder.query(smiles)
+        smiles = name_finder.query_smiles_from_file(conformer_file)
+        names = name_finder.query_name(smiles)
         pharmacophore_data = extract_pharmacophore_data(mol)
         xae_mol = mol_tensorizer.featurize_molecules([mol])
+        # TODO: if pharmacophore data is not found, generatate it using pharmit
+        if pharmacophore_data is None:
+            print(f"Failed to parse pharmacophore data for {smiles}")
 
     # TODO: convert pharmacophore and names into tensors
+    # TODO: can you combine the conformer_file -> smiles -> names into one query rather than two? one query that is batched?
     # TODO: process molecules in batches; 
     #     this includes using the NameFinder.query_batch method instead of NameFinder.query
+    #     you can also batch with NameFinder.query_smiles_from_file_batch in stead of NameFinder.query_smiles_from_file
     #     MoleculeTensorizer can handle batches of molecules
-    #     but for optimial efficiency we may want to paralellize
+    # TODO: parallelize processing: hand chunks of conformer files to subprocesses
     # TODO: write molecules to disk in chunks
         

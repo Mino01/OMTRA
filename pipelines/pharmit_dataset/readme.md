@@ -164,3 +164,55 @@ There are about 20 `/dataXX` directories.
 
 A `dataXX/conformers` directory contains about 50k subdirectories
 A `dataXX/conformers/0` directory contains about 400 conformer files
+
+# More issues
+
+- not everything has a pharmacophore attached so we need to generate pharmacophores on the fly for those that don't
+- use database to map from sdf file -> smiles string
+    - anything with a * in the smiles should be thrown out 
+
+# Generating pharmacophores on the fly 
+
+```python
+phfile = os.path.join(tmp,"ph.json")
+cmd = f'pharmit pharma -receptor {rec_path} -in {lig_path} -out {phfile}'
+subprocess.check_call(cmd,shell=True)
+
+#some files have another json object in them - only take first
+#in actuality, it is a bug with how pharmit/openbabel is dealing
+#with gzipped sdf files that causes only one molecule to be read
+decoder = json.JSONDecoder()
+ph = decoder.raw_decode(open(phfile).read())[0]
+
+if ph['points']:
+    feature_coords = np.array([(p['x'],p['y'],p['z']) for p in ph['points'] if p['enabled']])
+    feature_kind = np.array([ph_type_to_idx[p['name']] for p in ph['points'] if p['enabled']])
+else:
+    feature_coords = []
+    feature_kind = []
+```
+
+
+# Locating molecules in the database
+
+Curretly we locate molecules in the database by their smiles string. However, the smiles string is an unreliable lookup mechanism. We need to do the following:
+1. from the sdf file path on jabba, lookup the smiles string <-> sdf pairing in the database
+2. from the smiles string, lookup up the names in the database (our code does this now alreayd, we're just chainging how we get the smiles string)
+
+Possibly we can do this in one query call to the database
+
+## Info on structure of pharmit database
+
+There are two tables, names and structures. `names` has two columns: smile and name, nothing else. `structures` has the following columns:
+
+```plaintext
+| smile                                     | id        | weight    | nconfs | sdfloc                                   |
+|-------------------------------------------|-----------|-----------|--------|------------------------------------------|
+| *                                         | 220159550 | 0         | 1      | /data07/conformers/22015/220159550.sdf.gz |
+| **                                        | 220650182 | 0         | 1      | /data03/conformers/22065/220650182.sdf.gz |
+| ***                                       | 220650181 | 0         | 0      | NULL                                     |
+| ****                                      | 220650180 | 0         | 0      | NULL                                     |
+| */C=C/C(=C(O)OC)C/C=C\CCCC                | 217903739 | 293.248   | 20     | /data09/conformers/21790/217903739.sdf.gz |
+| */C=C1C=C(C(c2ccc(*)c2)OC1)c1ccccc1       | 217902146 | 232.089   | 5      | /data08/conformers/21790/217902146.sdf.gz |
+| */C=C/c1ccc(*)cc1                         | 217903314 | 102.047   | 1      | /data11/conformers/21790/217903314.sdf.gz |
+```

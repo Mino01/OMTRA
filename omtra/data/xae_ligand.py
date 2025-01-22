@@ -82,11 +82,10 @@ def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expli
 
     # get positions
     positions = molecule.GetConformer().GetPositions()
-    positions = np.from_numpy(positions)
 
     # get atom elements as a string
     # atom_types_str = [atom.GetSymbol() for atom in molecule.GetAtoms()]
-    atom_types = np.zeros(molecule.GetNumAtoms()).long()
+    atom_types = np.zeros(molecule.GetNumAtoms(), dtype=int)
     atom_charges = np.zeros_like(atom_types)
     for i, atom in enumerate(molecule.GetAtoms()):
         try:
@@ -98,20 +97,20 @@ def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expli
         atom_charges[i] = atom.GetFormalCharge()
 
     # get one-hot encoded of existing bonds only (no non-existing bonds)
-    adj = np.from_numpy(Chem.rdmolops.GetAdjacencyMatrix(molecule, useBO=True))
-    edge_index = adj.triu().nonzero().contiguous() # upper triangular portion of adjacency matrix
+    adj = Chem.rdmolops.GetAdjacencyMatrix(molecule, useBO=True)
+    edge_index = np.triu(adj).nonzero()  # upper triangular portion of adjacency matrix
 
     # note that because we take the upper-triangular portion of the adjacency matrix, there is only one edge per bond
     # at training time for every edge (i,j) in edge_index, we will also add edges (j,i)
     # we also only retain existing bonds, but then at training time we will add in edges for non-existing bonds
-    bond_types = adj[edge_index[:, 0], edge_index[:, 1]]
+    bond_types = adj[edge_index[0], edge_index[1]]
 
     # compute the number of upper-edge pairs
     atom_types = atom_types
 
     # TODO: we should centralize the data typing for all our datasets
     # and also make more informed decisions
-    atom_charges = atom_charges.type(np.int32)
-    edge_attr = bond_types.type(np.int32)
+    atom_charges = atom_charges.astype(np.int32)
+    edge_attr = bond_types.astype(np.int32)
 
     return positions, atom_types, atom_charges, edge_attr, edge_index, 
