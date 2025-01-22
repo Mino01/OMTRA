@@ -66,7 +66,7 @@ class MoleculeTensorizer():
 
 
 
-def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=True):
+def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False):
     """Converts an rdkit molecule to a tuple of numpy arrays containing the positions, atom types, bond types, and edge index."""
 
     # kekulize the molecule
