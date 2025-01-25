@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 
-from omtra.dataset.dataset import MultitaskDataset
+from omtra.dataset.dataset import MultiMultiSet
 
 
 class MultiTaskDataModule(pl.LightningDataModule):
@@ -31,7 +31,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
             self.val_dataset = self.load_dataset('val')
 
     def load_dataset(self, dataset_name: str):
-        return MultitaskDataset(dataset_name, **self.dataset_config)
+        return MultiMultiSet(dataset_name, **self.dataset_config)
     
     def train_dataloader(self):
         # TODO: we definitely need a custom dataloader here due to multitasks, adaptive batching, etc.
