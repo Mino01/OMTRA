@@ -6,7 +6,7 @@ import pymysql
 import itertools
 import re
 
-from omtra.data.xae_ligand import MoleculeTensorizer
+from omtra.data.xace_ligand import MoleculeTensorizer
 
 # TODO: this script should actually take as input just a hydra config 
 # - but Ramith is setting up our hydra stuff yet, and we don't 

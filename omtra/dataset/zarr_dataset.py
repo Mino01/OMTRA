@@ -54,7 +54,9 @@ class ZarrDataset(ABC, torch.utils.data.Dataset):
     def slice_array(self, array_name, start_idx, end_idx=None):
         """Slice data from a zarr array but utilize chunk caching to minimize disk access."""
 
+        single_idx = False
         if end_idx is None:
+            single_idx = True
             end_idx = start_idx+1
 
         chunk_size = self.root[array_name].chunks[0]
@@ -78,6 +80,6 @@ class ZarrDataset(ABC, torch.utils.data.Dataset):
                 chunk_slices.append(chunks[i])
 
         data = np.concatenate(chunk_slices)
-        if data.shape[0] == 1:
+        if single_idx:
             data = data.squeeze()
         return data
