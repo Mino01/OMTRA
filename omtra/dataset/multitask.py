@@ -37,21 +37,57 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                 - if a dataset is specified in single_dataset_configs but not included in p(dataset|task) here, then we will assume p(dataset|task) = 0
 
         """
-        dataset_names = list(single_dataset_configs.keys())
-        dataset_classes = [dataset_name_to_class[dataset_name] for dataset_name in dataset_names]
 
-        task_names = []
-        task_probs = []
+        # initialize the datasets we need
+        self.dataset_names = list(single_dataset_configs.keys())
+        dataset_classes = [dataset_name_to_class[dataset_name] for dataset_name in self.dataset_names]
+        self.datasets = {
+            dataset_name: dataset_class(**single_dataset_configs[dataset_name]) for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes)
+        }
+
+        # retrieve the tasks we need and their marginal probabilities p(task)
+        self.task_names = []
+        p_task = []
         for task_dict in tasks:
-            task_names.append(task_dict['name'])
-            task_probs.append(task_dict['probability'])
-        task_classes = [task_name_to_class[task_name] for task_name in task_names]
+            self.task_names.append(task_dict['name'])
+            p_task.append(task_dict['probability'])
+        
+        p_task = torch.tensor(p_task)
+        p_task = p_task / p_task.sum()
+        task_classes = [task_name_to_class[task_name] for task_name in self.task_names]
+        self.tasks = {
+            task_name: task_class() for task_name, task_class in zip(self.task_names, task_classes)
+        }
+
+        assert set(dataset_task_coupling.keys()) == set(self.task_names), "The keys of dataset_task_coupling must be the same as the task names in tasks"
+
+        # construct p(dataset, task)
+        p_dataset_task = torch.zeros(len(self.task_names), len(self.dataset_names))
+        for task_idx, task_name in enumerate(self.task_names):
+            for dataset_name, p in dataset_task_coupling[task_name]:
+                dataset_idx = self.dataset_names.index(dataset_name)
+                p_dataset_task[task_idx, dataset_idx] = p
+
+        # normalize by row sum
+        p_dataset_task = p_dataset_task / p_dataset_task.sum(dim=1, keepdim=True)
+
+        # multiply by p(task) to get p(dataset, task)
+        p_dataset_task = p_dataset_task * p_task.unsqueeze(1)
 
 
     def __len__(self):
         pass
 
-    def __getitem__(self, idx):
-        pass
+    def __getitem__(self, index):
+        
+        task_idx, dataset_idx, local_idx = index
+        task_name = self.task_names[task_idx]
 
+        task = self.task_names[task_idx]
+        g: dgl.DGLHeteroGraph = self.datasets[self.dataset_names[dataset_idx]][(task_idx, local_idx)]
+
+        # TODO: task specific transforms
+        # TODO: do individual datasets need access to the task name? figure out once implementing __getitem__ for individual datasets
+
+        return g, task_name
 

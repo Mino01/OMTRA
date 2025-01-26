@@ -4,6 +4,8 @@ import torch
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.data.graph import build_complex_graph
 from omtra.data.xace_ligand import sparse_to_dense
+from omtra.tasks.register import task_name_to_class
+from omtra.tasks.tasks import Task
 
 class PharmitDataset(ZarrDataset):
     def __init__(self, zarr_store_path: str):
@@ -16,30 +18,40 @@ class PharmitDataset(ZarrDataset):
     def __len__(self):
         return self.root['node_data']['node_lookup'].shape[0]
 
-    def __getitem__(self, idx) -> dgl.DGLHeteroGraph:
-       # TODO: nothing here accounts for the presence of pharamcophore data,
-       # which actually will be present in the final pharmit dataset!
-        node_start_idx, node_end_idx = self.slice_array('node_data/node_lookup', idx)
-        edge_start_idx, edge_end_idx = self.slice_array('edge_data/edge_lookup', idx)
+    def __getitem__(self, index) -> dgl.DGLHeteroGraph:
+        task_name, idx = index
+        task_class: Task = task_name_to_class[task_name]
 
-        # pull out the data for the graph
-        lig_x = self.slice_array('node_data/x', node_start_idx, node_end_idx)
-        lig_a = self.slice_array('node_data/a', node_start_idx, node_end_idx)
-        lig_c = self.slice_array('node_data/c', node_start_idx, node_end_idx)
-        lig_e = self.slice_array('edge_data/e', edge_start_idx, edge_end_idx)
-        lig_edge_idxs = self.slice_array('edge_data/edge_index', edge_start_idx, edge_end_idx)
+        # slice lig node data
+        xace_ligand = []
+        start_idx, end_idx = self.slice_array('lig/node/graph_lookup', idx)
+        for nfeat in ['x', 'a', 'c']:
+            xace_ligand.append(
+                self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
+            )
+
+
+        # get slice indicies for ligand-ligand edges
+        edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
+
+        # slice ligand-ligand edge data
+        start_idx, end_idx = edge_slice_idxs
+        xace_ligand.append(self.slice_array('lig/edge/e', start_idx, end_idx))
+        xace_ligand.append(self.slice_array('lig/edge/edge_index', start_idx, end_idx))
 
         # convert to torch tensors
-        lig_x = torch.from_numpy(lig_x)
-        lig_a = torch.from_numpy(lig_a)
-        lig_c = torch.from_numpy(lig_c)
-        lig_e = torch.from_numpy(lig_e)
-        lig_edge_idxs = torch.from_numpy(lig_edge_idxs)
+        # TODO: data typing!! need to design data typing!
+        xace_ligand = [torch.from_numpy(arr) for arr in xace_ligand]
 
         # convert sparse xae to dense xae
-        lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(lig_x, lig_a, lig_c, lig_e, lig_edge_idxs)
+        lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(*xace_ligand)
 
+        # TODO: now that we have task information, we can actually write in necessary flow-matching related functionality:
+        # - sampling priors for each modality
+        # - doing OT alignment on ligand and pharmacophore nodes
+        # - set graph keys to things like x_1_true and x_0 for ground-truth positions and prior samples
 
+        # construct inputs to graph building function
         g_node_data = {
             'lig': {'x': lig_x, 'a': lig_a, 'c': lig_c},
         }
@@ -49,6 +61,16 @@ class PharmitDataset(ZarrDataset):
         g_edge_idxs = {
             'lig_to_lig': lig_edge_idxs,
         }
+
+        # if this task includes pharmacophore data, then we need to slice and add that data to the graph
+        include_pharmacophore = 'pharmacophore' in task_class.modalities_present
+        if include_pharmacophore:
+            start_idx, end_idx = self.slice_array('pharm/node/graph_lookup', idx)
+            pharm_x = self.slice_array('pharm/node/x', start_idx, end_idx)
+            pharm_a = self.slice_array('pharm/node/a', start_idx, end_idx)
+            pharm_x = torch.from_numpy(pharm_x)
+            pharm_a = torch.from_numpy(pharm_a)
+            g_node_data['pharm'] =  {'x': pharm_x, 'a': pharm_a}
 
         g = build_complex_graph(node_data=g_node_data, edge_idxs=g_edge_idxs, edge_data=g_edge_data)
 

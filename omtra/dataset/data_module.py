@@ -4,6 +4,7 @@ from typing import List, Dict
 import dgl
 
 from omtra.dataset.multitask import MultitaskDataSet
+from omtra.dataset.samplers import MultiTaskSampler
 
 
 class MultiTaskDataModule(pl.LightningDataModule):
@@ -40,21 +41,23 @@ class MultiTaskDataModule(pl.LightningDataModule):
                              **self.multitask_dataset_config)
     
     def train_dataloader(self):
-        # TODO: we definitely need a custom dataloader here due to multitasks, adaptive batching, etc.
+        batch_sampler = MultiTaskSampler(self.train_dataset, self.batch_size)
         dataloader = DataLoader(self.train_dataset, 
-                                batch_size=self.batch_size, 
-                                shuffle=True, 
-                                collate_fn=dgl.batch, 
+                                batch_sampler=batch_sampler,
+                                collate_fn=omtra_collate_fn, 
                                 num_workers=self.num_workers)
 
         return dataloader
     
 
     def val_dataloader(self):
-        # TODO: we definitely need a custom dataloader here due to multitasks, adaptive batching, etc.
+        batch_sampler = MultiTaskSampler(self.val_dataset, self.batch_size)
         dataloader = DataLoader(self.val_dataset, 
-                                batch_size=self.batch_size*2, 
-                                shuffle=True, 
-                                collate_fn=dgl.batch, 
+                                batch_sampler=batch_sampler,
+                                collate_fn=omtra_collate_fn, 
                                 num_workers=self.num_workers)
         return dataloader
+
+
+def omtra_collate_fn(batch):
+    raise NotImplementedError

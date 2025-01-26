@@ -14,6 +14,7 @@ class ZarrDataset(OMTRADataset):
     def __init__(self, zarr_store_path: str, n_chunks_cache: float = 4.25):
         super().__init__()
 
+        self.store_path = zarr_store_path
         self.store = zarr.storage.LocalStore(zarr_store_path, read_only=True)
         self.root = zarr.open(store=self.store, mode='r')
         self.n_chunks_cache = n_chunks_cache
@@ -54,6 +55,9 @@ class ZarrDataset(OMTRADataset):
 
     def slice_array(self, array_name, start_idx, end_idx=None):
         """Slice data from a zarr array but utilize chunk caching to minimize disk access."""
+
+        if array_name not in self.array_keys:
+            raise ValueError(f"There is no array with the name {array_name} in the zarr store located at {self.store_path}")
 
         single_idx = False
         if end_idx is None:

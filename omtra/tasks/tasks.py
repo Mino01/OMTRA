@@ -9,7 +9,7 @@ class Task:
     protein_state_t0 = 'noise'
 
     @functools.cached_property
-    def t0_modality_arr(self):
+    def t0_modality_arr(self) -> torch.Tensor:
         arr = torch.zeros(len(canonical_modality_order), dtype=bool)
         for i, modality in enumerate(canonical_modality_order):
             if modality in self.observed_at_t0:
@@ -17,12 +17,18 @@ class Task:
         return arr
     
     @functools.cached_property
-    def t1_modality_arr(self):
+    def t1_modality_arr(self) -> torch.Tensor:
         arr = torch.zeros(len(canonical_modality_order), dtype=bool)
         for i, modality in enumerate(canonical_modality_order):
             if modality in self.observed_at_t1:
                 arr[i] = 1
         return arr
+    
+    @functools.cached_property
+    def modalities_present(self):
+        present_modality_mask = self.t0_modality_arr or self.t1_modality_arr
+        present_modality_idxs = torch.where(present_modality_mask)[0]
+        return [canonical_modality_order[i] for i in present_modality_idxs]
     
 ##
 # tasks with ligand only
