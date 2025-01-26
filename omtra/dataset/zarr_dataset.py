@@ -13,7 +13,7 @@ class ZarrDataset(ABC, torch.utils.data.Dataset):
     def __init__(self, zarr_store_path: str, n_chunks_cache: float = 4.25):
         super().__init__()
 
-        self.store = zarr.storage.LocalStore(zarr_store_path)
+        self.store = zarr.storage.LocalStore(zarr_store_path, read_only=True)
         self.root = zarr.open(store=self.store, mode='r')
         self.n_chunks_cache = n_chunks_cache
         self.build_cached_chunk_fetchers()
@@ -59,23 +59,29 @@ class ZarrDataset(ABC, torch.utils.data.Dataset):
             single_idx = True
             end_idx = start_idx+1
 
-        chunk_size = self.root[array_name].chunks[0]
-        start_chunk_id = start_idx // chunk_size
-        end_chunk_id = end_idx // chunk_size
+        chunk_size = self.root[array_name].chunks[0] # the number of rows in each chunk (we only chunk and slice along the first dimension)
+
+        # get the chunk id, as well as the index of our slice relative to the chunk, for the start and end of the slice
+        start_chunk_id, start_chunk_idx = divmod(start_idx, chunk_size)
+        end_chunk_id, end_chunk_idx = divmod(end_idx, chunk_size)
+
+        # retrieve all chunks that are "touched" by the slice, using the cached chunk fetchers
         chunks = [self.chunk_fetchers[array_name](chunk_id) for chunk_id in range(start_chunk_id, end_chunk_id + 1)]
+
+        # slice just the data we want from the chunks
         chunk_slices = []
         for i in range(len(chunks)):
 
             # if the slice lays in just one chunk
             if len(chunks) == 1:
-                chunk_slices.append(chunks[i][start_idx % chunk_size:end_idx % chunk_size])
+                chunk_slices.append(chunks[i][start_chunk_idx:end_chunk_idx])
                 continue
 
             # for multi-chunk access:
             if i == 0:
-                chunk_slices.append(chunks[i][start_idx % chunk_size:])
+                chunk_slices.append(chunks[i][start_chunk_idx:])
             elif i == len(chunks) - 1:
-                chunk_slices.append(chunks[i][:end_idx % chunk_size])
+                chunk_slices.append(chunks[i][:end_chunk_idx])
             else:
                 chunk_slices.append(chunks[i])
 
