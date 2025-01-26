@@ -69,21 +69,17 @@ class ZarrDataset(ABC, torch.utils.data.Dataset):
         chunks = [self.chunk_fetchers[array_name](chunk_id) for chunk_id in range(start_chunk_id, end_chunk_id + 1)]
 
         # slice just the data we want from the chunks
-        chunk_slices = []
-        for i in range(len(chunks)):
-
-            # if the slice lays in just one chunk
-            if len(chunks) == 1:
-                chunk_slices.append(chunks[i][start_chunk_idx:end_chunk_idx])
-                continue
-
-            # for multi-chunk access:
-            if i == 0:
-                chunk_slices.append(chunks[i][start_chunk_idx:])
-            elif i == len(chunks) - 1:
-                chunk_slices.append(chunks[i][:end_chunk_idx])
-            else:
-                chunk_slices.append(chunks[i])
+        if len(chunks) == 1:
+            chunk_slices = [  chunks[0][start_chunk_idx:end_chunk_idx]  ]
+        else:
+            chunk_slices = []
+            for i in range(len(chunks)):
+                if i == 0:
+                    chunk_slices = [chunks[i][start_chunk_idx:]]
+                elif i == len(chunks) - 1:
+                    chunk_slices.append(chunks[i][:end_chunk_idx])
+                else:
+                    chunk_slices.append(chunks[i])
 
         data = np.concatenate(chunk_slices)
         if single_idx:
