@@ -5,8 +5,9 @@ import functools
 from abc import ABC, abstractmethod
 
 from omtra.utils.zarr_utils import list_zarr_arrays
+from omtra.dataset.dataset import OMTRADataset
 
-class ZarrDataset(ABC, torch.utils.data.Dataset):
+class ZarrDataset(OMTRADataset):
 
     """Base class for single datasets. Specifically a dataset that is stored in a zarr store. Supports caching of chunks to minimize disk access."""
 

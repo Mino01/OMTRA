@@ -1,26 +1,32 @@
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
+from typing import List, Dict
+import dgl
 
-from omtra.dataset.dataset import MultiMultiSet
+from omtra.dataset.multitask import MultiMultiSet
 
 
 class MultiTaskDataModule(pl.LightningDataModule):
 
     def __init__(
         self, 
+        tasks: List[dict], 
+        dataset_paths: Dict[str, str],
         dataset_config: dict, 
-        dm_prior_config: dict, 
+        prior_config: dict, 
         batch_size: int, 
         num_workers: int = 0, 
         distributed: bool = False, 
         max_num_edges: int = 40000
     ):
         super().__init__()
-        self.distributed = distributed
+        self.tasks = tasks
+        self.dataset_paths = dataset_paths
         self.dataset_config = dataset_config
+        self.distributed = distributed
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.prior_config = dm_prior_config
+        self.prior_config = prior_config
         self.max_num_edges = max_num_edges
         self.save_hyperparameters()
 
@@ -30,8 +36,11 @@ class MultiTaskDataModule(pl.LightningDataModule):
             self.train_dataset = self.load_dataset('train')
             self.val_dataset = self.load_dataset('val')
 
-    def load_dataset(self, dataset_name: str):
-        return MultiMultiSet(dataset_name, **self.dataset_config)
+    def load_dataset(self, split: str):
+        return MultiMultiSet(split, 
+                             tasks=self.tasks,
+                             dataset_paths=self.dataset_paths,
+                             **self.dataset_config)
     
     def train_dataloader(self):
         # TODO: we definitely need a custom dataloader here due to multitasks, adaptive batching, etc.
