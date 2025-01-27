@@ -62,7 +62,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         assert set(dataset_task_coupling.keys()) == set(self.task_names), "The keys of dataset_task_coupling must be the same as the task names in tasks"
 
         # construct p(dataset, task)
-        p_dataset_task = torch.zeros(len(self.task_names), len(self.dataset_names))
+        p_dataset_task = torch.zeros(len(self.task_names), len(self.dataset_names), dtype=torch.float32)
         for task_idx, task_name in enumerate(self.task_names):
             for dataset_name, p in dataset_task_coupling[task_name]:
                 dataset_idx = self.dataset_names.index(dataset_name)
@@ -73,6 +73,8 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
         # multiply by p(task) to get p(dataset, task)
         p_dataset_task = p_dataset_task * p_task.unsqueeze(1)
+        p_dataset_task = p_dataset_task / p_dataset_task.sum() # just make sure it sums to 1
+        self.p_dataset_task = p_dataset_task
 
 
     def __len__(self):

@@ -8,8 +8,12 @@ from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 
 class PharmitDataset(ZarrDataset):
-    def __init__(self, zarr_store_path: str):
+    def __init__(self, 
+                 zarr_store_path: str,
+                 graphs_per_chunk: int
+    ):
         super().__init__(zarr_store_path)
+        self.graphs_per_chunk = graphs_per_chunk
 
     @classmethod
     def name(cls):
@@ -29,8 +33,7 @@ class PharmitDataset(ZarrDataset):
             xace_ligand.append(
                 self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
             )
-
-
+            
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
 
