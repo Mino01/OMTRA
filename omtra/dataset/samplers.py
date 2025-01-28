@@ -75,5 +75,14 @@ class MultiTaskSampler(Sampler):
 
     def __iter__(self):
 
-        # TODO: (i'm working on it i promise)
-        pass
+        self.build_chunk_trackers()
+        while True:
+            task_idx, dataset_idx = self.sample_task_and_dataset()
+
+            # TODO: broadcast or gather the task_idx and dataset_idx to all ranks
+
+            chunk_tracker_idx = self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)]
+            chunk_tracker = self.chunk_trackers[chunk_tracker_idx]
+
+            # get indicies of current chunk
+            # select indicies until max_num_edges is reached

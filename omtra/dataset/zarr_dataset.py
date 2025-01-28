@@ -22,7 +22,7 @@ class ZarrDataset(OMTRADataset):
         
 
     @abstractmethod
-    def retrieve_graph_chunks(self):
+    def retrieve_graph_chunks(self) -> torch.Tensor:
         pass
 
     @functools.cached_property
