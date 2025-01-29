@@ -2,6 +2,7 @@ import torch
 import zarr
 import numpy as np
 import functools
+from pathlib import Path
 from abc import ABC, abstractmethod
 
 from omtra.utils.zarr_utils import list_zarr_arrays
@@ -14,6 +15,9 @@ class ZarrDataset(OMTRADataset):
 
     def __init__(self, zarr_store_path: str, n_chunks_cache: float = 4.25):
         super().__init__()
+
+        if not Path(zarr_store_path).exists():
+            raise ValueError(f"Zarr store path does not exist: {zarr_store_path}")
 
         self.store_path = zarr_store_path
         self.store = zarr.storage.LocalStore(zarr_store_path, read_only=True)

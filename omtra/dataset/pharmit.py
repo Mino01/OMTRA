@@ -115,3 +115,21 @@ class PharmitDataset(ZarrDataset):
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
+    
+    def get_num_edges(self, task: Task, start_idx, end_idx):
+        # here, unlike in other places, start_idx and end_idx are 
+        # indexes into the graph_lookup array, not a node/edge data array
+
+        raise NotImplementedError('This function is not implemented yet! whats here was written by chatgpt lol')
+        # TODO: implement this, requires decisions, or perhaps access to graph config information to infer # edges per graph
+        # for lig-lig edges its easy
+        # for pharm-pharm and lig-pharm edges, we have not yet decided how to handle them
+        edge_types = ['lig_to_lig']
+        edge_counts = []
+        for etype in edge_types:
+            graph_lookup = self.slice_array(f'{etype}/graph_lookup', start_idx, end_idx)
+            edge_counts.append(graph_lookup[:, 1] - graph_lookup[:, 0])
+
+        edge_counts = np.stack(edge_counts, axis=0).sum(axis=0)
+        edge_counts = torch.from_numpy(edge_counts)
+        return edge_counts

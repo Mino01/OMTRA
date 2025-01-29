@@ -2,6 +2,7 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from typing import List, Dict
 import dgl
+from omegaconf import DictConfig
 
 from omtra.dataset.multitask import MultitaskDataSet
 from omtra.dataset.samplers import MultiTaskSampler
@@ -12,7 +13,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
     def __init__(
         self, 
         tasks: List[dict], 
-        multitask_dataset_config: dict, 
+        multitask_dataset_config: DictConfig, 
         prior_config: dict, 
         batch_size: int, 
         num_workers: int = 0, 
