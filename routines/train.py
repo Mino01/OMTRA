@@ -1,9 +1,17 @@
 import hydra
 
 import pytorch_lightning as pl
-from pytorch_lightning import LightningDataModule
+from omtra.dataset.data_module import MultiTaskDataModule
+from pathlib import Path
+import omtra
 
 from omegaconf import DictConfig, OmegaConf
+
+
+def omtra_root_resolver():
+    return str(Path(omtra.__file__).parent.parent)
+
+OmegaConf.register_new_resolver("omtra_root", omtra_root_resolver, replace=True)
 
 def train(cfg: DictConfig):
     """Trains the model.
@@ -14,7 +22,7 @@ def train(cfg: DictConfig):
     pl.seed_everything(cfg.seed, workers=True)
 
     print(f"⚛ Instantiating datamodule <{cfg.task_group.data._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.task_group.data)
+    datamodule: MultiTaskDataModule = hydra.utils.instantiate(cfg.task_group.data)
 
     datamodule.setup(stage='fit')
     # TODO: Implmenet other instantiation logic
@@ -26,7 +34,6 @@ def main(cfg: DictConfig):
 
     cfg is a DictConfig configuration composed by Hydra.
     """
-
     print("\n=== Training Config ===")
     print(OmegaConf.to_yaml(cfg))
 

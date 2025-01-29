@@ -95,7 +95,9 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                     single_dataset_config['n_chunks_cache'] = 7
 
         self.datasets = {
-            dataset_name: dataset_class(**single_dataset_configs[dataset_name]) for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes)
+            dataset_name: dataset_class(
+                split=split, **single_dataset_configs[dataset_name]) 
+                for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes)
         }
 
 

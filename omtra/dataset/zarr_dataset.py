@@ -13,14 +13,15 @@ class ZarrDataset(OMTRADataset):
 
     """Base class for single datasets. Specifically a dataset that is stored in a zarr store. Supports caching of chunks to minimize disk access."""
 
-    def __init__(self, zarr_store_path: str, n_chunks_cache: float = 4.25):
+    def __init__(self, split: str, processed_data_dir: str, n_chunks_cache: float = 4.25):
         super().__init__()
 
-        if not Path(zarr_store_path).exists():
-            raise ValueError(f"Zarr store path does not exist: {zarr_store_path}")
+        zarr_store_path = Path(processed_data_dir) / f'{split}.zarr'
+        if not zarr_store_path.exists():
+            raise ValueError(f"There is no zarr store at the path {zarr_store_path}")
 
-        self.store_path = zarr_store_path
-        self.store = zarr.storage.LocalStore(zarr_store_path, read_only=True)
+        self.store_path = zarr_store_path   
+        self.store = zarr.storage.LocalStore(str(zarr_store_path), read_only=True)
         self.root = zarr.open(store=self.store, mode='r')
         self.n_chunks_cache = n_chunks_cache
         self.build_cached_chunk_fetchers()

@@ -9,10 +9,11 @@ from omtra.tasks.tasks import Task
 
 class PlinderDataset(ZarrDataset):
     def __init__(self, 
-                 zarr_store_path: str,
+                 split: str,
+                 processed_data_dir: str,
                  graphs_per_chunk: int
     ):
-        super().__init__(zarr_store_path)
+        super().__init__(split, processed_data_dir)
         self.graphs_per_chunk = graphs_per_chunk
 
     @classmethod
