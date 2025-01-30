@@ -7,6 +7,7 @@ from omtra.data.graph import build_complex_graph
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
+from omtra.utils.misc import classproperty
 
 class PharmitDataset(ZarrDataset):
     def __init__(self, 
@@ -17,7 +18,7 @@ class PharmitDataset(ZarrDataset):
         super().__init__(split, processed_data_dir)
         self.graphs_per_chunk = graphs_per_chunk
 
-    @classmethod
+    @classproperty
     def name(cls):
         return 'pharmit'
 

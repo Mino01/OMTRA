@@ -3,7 +3,7 @@ defaults:
   - _self_
   - model: default
   - trainer: default
-  - task_group: docking
+  - task_group: no_protein
 
 seed: 42
 
@@ -11,5 +11,4 @@ seed: 42
 batch_size: 32
 num_workers: 4
 
-paths:
-  data_dir: /dummy_path/
+pharmit_path: ${omtra_root:}/data/pharmit

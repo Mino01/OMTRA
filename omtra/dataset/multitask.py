@@ -12,7 +12,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
     """A dataset capable of serving up samples from multiple zarr datasets."""
 
-    def __init__(self, split: str, task_inputs: List[dict], single_dataset_configs: Dict[str, dict], dataset_task_coupling: dict):
+    def __init__(self, split: str, tasks: List[dict], single_dataset_configs: Dict[str, dict], dataset_task_coupling: dict):
         """
         Describing the nature of the inputs, for now:
 
@@ -46,7 +46,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         # retrieve the tasks we need and their marginal probabilities p(task)
         self.task_names = []
         p_task = []
-        for task_dict in task_inputs:
+        for task_dict in tasks:
             self.task_names.append(task_dict['name'])
             p_task.append(task_dict['probability'])
         
@@ -73,6 +73,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
 
         # initialize dataset classes
+        self.datasets = {}
         dataset_classes = [dataset_name_to_class[dataset_name] for dataset_name in self.dataset_names]
         for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes):
             single_dataset_config = deepcopy(single_dataset_configs[dataset_name])
@@ -91,11 +92,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
                 if has_tasks_using_apo and has_tasks_not_using_apo:
                     single_dataset_config['n_chunks_cache'] = 7
 
-        self.datasets = {
-            dataset_name: dataset_class(
-                split=split, **single_dataset_configs[dataset_name]) 
-                for dataset_name, dataset_class in zip(self.dataset_names, dataset_classes)
-        }
+            self.datasets[dataset_name] = dataset_class(split=split, **single_dataset_config)
 
 
     def __len__(self):
