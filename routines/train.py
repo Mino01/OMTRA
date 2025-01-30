@@ -1,17 +1,14 @@
 import hydra
 
 import pytorch_lightning as pl
-from omtra.dataset.data_module import MultiTaskDataModule
-from pathlib import Path
-import omtra
-
 from omegaconf import DictConfig, OmegaConf
 
+from omtra.dataset.data_module import MultiTaskDataModule
+from omtra.utils import omtra_root
 
-def omtra_root_resolver():
-    return str(Path(omtra.__file__).parent.parent)
-
-OmegaConf.register_new_resolver("omtra_root", omtra_root_resolver, replace=True)
+# register the omtra_root resolver so that anything in a config file
+# with ${omtra_root:} will be replaced with the root path of the omtra package
+OmegaConf.register_new_resolver("omtra_root", omtra_root, replace=True)
 
 def train(cfg: DictConfig):
     """Trains the model.
