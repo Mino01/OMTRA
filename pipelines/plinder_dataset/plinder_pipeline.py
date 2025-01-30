@@ -58,7 +58,7 @@ class StructureProcessor:
     def __init__(
         self,
         atom_map: List[str],
-        pocket_cutoff: float = 5.0,
+        pocket_cutoff: float = 8.0,
         n_cpus: int = 1,
         raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
@@ -164,7 +164,7 @@ class SystemProcessor:
     def __init__(
         self,
         atom_map: List[str],
-        pocket_cutoff: float = 5.0,
+        pocket_cutoff: float = 8.0,
         raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
         self.structure_processor = StructureProcessor(
@@ -197,10 +197,31 @@ class SystemProcessor:
             for path in apo_paths
         ]
 
+        # Get pred paths
+        pred_ids = system.linked_structures[system.linked_structures["kind"] == "pred"][
+            "id"
+        ].tolist()
+
+        pred_paths = [
+            system.get_linked_structure(link_kind="pred", link_id=id) for id in pred_ids
+        ]
+
+        superposed_pred_paths = [
+            str(
+                Path(path).parent
+                / "pred"
+                / system_id
+                / Path(path).stem
+                / "superposed.cif"
+            )
+            for path in pred_paths
+        ]
+
         result = self.process_structures(
             receptor_path=receptor_path,
             ligand_paths=ligand_paths,
             apo_paths=superposed_apo_paths,
+            pred_paths=superposed_pred_paths,
             chain_mapping=system.chain_mapping,
             save_pockets=save_pockets,
         )
@@ -215,6 +236,7 @@ class SystemProcessor:
         receptor_path: str,
         ligand_paths: List[str],
         apo_paths: Optional[List[str]] = None,
+        pred_paths: Optional[List[str]] = None,
         chain_mapping: Optional[Dict[str, str]] = None,
         save_pockets: bool = False,
     ) -> Dict:
@@ -253,10 +275,21 @@ class SystemProcessor:
                 apo_structures[apo_key] = self.structure_processor.process_structure(
                     apo_struct, cif
                 )
+        
+        # Process pred structures
+        pred_structures = {}
+        if pred_paths:
+            for pred_path in pred_paths:
+                pred_key = Path(pred_path).parent.name
+                pred_struct, cif = self.structure_processor.load_structure(pred_path)
+                pred_structures[pred_key] = self.structure_processor.process_structure(
+                    pred_struct, cif
+                )
 
         return {
             "receptor": receptor_data,
             "ligands": ligands_data,
             "pockets": pockets_data,
             "apo_structures": apo_structures if apo_paths else None,
+            "pred_structures": pred_structures if pred_paths else None,
         }
