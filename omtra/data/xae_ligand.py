@@ -65,11 +65,51 @@ class MoleculeTensorizer():
         return all_positions, all_atom_types, all_atom_charges, all_bond_types, all_bond_idxs, num_failed, failed_idxs
 
 
+def minimize_molecule(molecule: Chem.rdchem.Mol):
+
+    # create a copy of the original ligand
+    lig = Chem.rdchem.Mol(molecule)
+
+    # Add hydrogens
+    lig_H = Chem.AddHs(lig, addCoords=True)
+
+    try:
+        ff = Chem.UFFGetMoleculeForceField(lig_H,ignoreInterfragInteractions=False)
+    except Exception as e:
+        return None
+    
+    before_energy = ff.CalcEnergy()
+
+    # documentation for this function call, incase we want to play with number of minimization steps or record whether it was successful: https://www.rdkit.org/docs/source/rdkit.ForceField.rdForceField.html#rdkit.ForceField.rdForceField.ForceField.Minimize
+    try:
+        ff.Minimize(maxIts=400)
+    except Exception as e:
+        return None
+
+    after_energy = ff.CalcEnergy()
+
+    # Get the minimized positions for molecule with H's
+    cpos = lig_H.GetConformer().GetPositions()
+
+    # Original ligand with no H's
+    conf = lig.GetConformer()
+
+    for (i,xyz) in enumerate(cpos[-lig.GetNumAtoms():]):
+        conf.SetAtomPosition(i,xyz)
+
+    # compute rmsd between original and minimized ligand
+    rmsd = compute_rmsd(ref_lig, lig_H)
+    print('rmsd:', rmsd)
+    print('Energy before:', before_energy, ', Energy after:', after_energy)
+
+    return lig
+
+
 
 def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False):
     """Converts an rdkit molecule to a tuple of numpy arrays containing the positions, atom types, bond types, and edge index."""
 
-    # kekulize the molecule
+    # Sanitize the molecule
     try:
         Chem.SanitizeMol(molecule)
     except Chem.SanitizationException as e:
@@ -87,12 +127,22 @@ def rdmol_to_xae(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expli
     # atom_types_str = [atom.GetSymbol() for atom in molecule.GetAtoms()]
     atom_types = np.zeros(molecule.GetNumAtoms(), dtype=int)
     atom_charges = np.zeros_like(atom_types)
+
+
+    # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
+    counterions = ['Cl', 'Br', 'I', 'Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
+
     for i, atom in enumerate(molecule.GetAtoms()):
         try:
             atom_types[i] = atom_map_dict[atom.GetSymbol()]
         except KeyError:
-            print(f"Atom {atom.GetSymbol()} not in atom map", flush=True)
-            return None, None, None, None, None
+            if atom.getSymbol() in counterions:
+                print("Atom {atom.GetSymbol()} is a known counterion")
+                molecule.RemoveAtom(atom.GetIdx())
+                molecule = minimize_molecule(molecule)
+            else:
+                print(f"Atom {atom.GetSymbol()} not in atom map", flush=True)
+                return None, None, None, None, None
         
         atom_charges[i] = atom.GetFormalCharge()
 

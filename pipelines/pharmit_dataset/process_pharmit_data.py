@@ -427,7 +427,6 @@ if __name__ == '__main__':
 
     
 
-
     """
     for conformer_file in crawl_conformer_files(args.db_dir):
         mol = read_mol_from_conf_file(conformer_file)   # RDKit Mol object
