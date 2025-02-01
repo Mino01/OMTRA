@@ -12,6 +12,8 @@ import gc
 import csv
 import os
 from collections import defaultdict
+import zarr
+import time
 
 
 from omtra.data.xae_ligand import MoleculeTensorizer
@@ -220,11 +222,11 @@ def batch_generator(iterable, batch_size):
         yield batch
 
 
-def format_tensors(positions, atom_types, atom_charges, bond_types, bond_idxs, databases=None, x_pharm=None, a_pharm=None):
+def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_idxs, databases=[np.array([])], x_pharm=[np.array([])], a_pharm=[np.array([])]):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
-    batch_num_databases = np.array([x.shape[0] for x in databases])
+    batch_num_db_nodes = np.array([x.shape[0] for x in databases])
     batch_num_pharm_nodes = np.array([x.shape[0] for x in x_pharm])
     batch_num_edges = np.array([eidxs.shape[0] for eidxs in bond_idxs])
 
@@ -240,7 +242,6 @@ def format_tensors(positions, atom_types, atom_charges, bond_types, bond_idxs, d
     x_pharm = np.concatenate(x_pharm, axis=0)
     a_pharm = np.concatenate(a_pharm, axis=0)
 
-
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
     node_lookup = build_lookup_table(batch_num_nodes)
 
@@ -248,13 +249,11 @@ def format_tensors(positions, atom_types, atom_charges, bond_types, bond_idxs, d
     edge_lookup = build_lookup_table(batch_num_edges)
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
-    db_lookup = build_lookup_table(batch_num_databases)
+    db_lookup = build_lookup_table(batch_num_db_nodes)
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
     pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
 
-    # print("batch_num_nodes:", batch_num_nodes)
-    # print("batch_num_edges:", batch_num_edges)
     print("Shape of x:", x.shape)
     print("Shape of a:", a.shape)
     print("Shape of c:", c.shape)
@@ -269,33 +268,97 @@ def format_tensors(positions, atom_types, atom_charges, bond_types, bond_idxs, d
     print("Shape of pharm_node_lookup:", pharm_node_lookup.shape)
 
 
+    graphs_per_chunk = 50 # very important parameter
+    id = str(int(time.time() * 1000))[-8:]
+    store = zarr.storage.LocalStore(f"test_ligand_dataset_{id}.zarr")
 
-def save_tensors_to_disk(tensors, output_path, chunk_number, chunk_size):
-    os.makedirs(output_path, exist_ok=True)
+    # Create a root group
+    root = zarr.group(store=store)
 
-    with open(f"{output_path}/chunk_{chunk_number}.pkl", 'wb') as f:
-        pickle.dump(tensors, f)
+    ntypes = ['lig'] # ntypes = ['lig', 'db', 'pharm']
 
-    new_row = [[f"chunk_{chunk_number}.pkl", chunk_size]]
-    with open(f"{output_path}/chunk_data.csv", 'a', newline='') as file:   # Save chunk size to csv file
-        writer = csv.writer(file)
-        writer.writerows(new_row)
+    ntype_groups = {}
+    for ntype in ntypes:
+        ntype_groups[ntype] = root.create_group(ntype)
+
+
+    lig_node = ntype_groups['lig'].create_group('node')
+    lig_edge_data = ntype_groups['lig'].create_group('edge')
+
+    """
+    pharm_node_data = ntype_groups['pharm'].create_group('node')
+    db_node_data = ntype_groups['db'].create_group('node')
+    """
+
+    # Store tensors under different keys with specified chunk sizes
+
+    # some simple heuristics to decide chunk sizes for node and edge data
+    mean_lig_nodes_per_graph = int(np.mean(batch_num_nodes))
+    mean_ll_edges_per_graph = int(np.mean(batch_num_edges))
+    """
+    mean_db_nodes_per_graph = int(np.mean(batch_num_db_nodes))
+    mean_pharm_nodes_per_graph = int(np.mean([x.shape[0] for x in x_pharm]))
+    """
+
+    nodes_per_chunk = graphs_per_chunk * mean_lig_nodes_per_graph
+    ll_edges_per_chunk = graphs_per_chunk * mean_ll_edges_per_graph
+    """
+    db_node_per_chunk = graphs_per_chunk * mean_db_nodes_per_graph
+    pharm_nodes_per_chunk = graphs_per_chunk * mean_pharm_nodes_per_graph
+    """
+
+    # create arrays for node data
+    lig_node.create_array('x', shape=x.shape, chunks=(nodes_per_chunk, 3), dtype=x.dtype)
+    lig_node.create_array('a', shape=a.shape, chunks=(nodes_per_chunk,), dtype=a.dtype)
+    lig_node.create_array('c', shape=c.shape, chunks=(nodes_per_chunk,), dtype=c.dtype)
+
+    # create arrays for edge data
+    lig_edge_data.create_array('e', shape=e.shape, chunks=(ll_edges_per_chunk,), dtype=e.dtype)
+    lig_edge_data.create_array('edge_index', shape=edge_index.shape, chunks=(ll_edges_per_chunk, 2), dtype=edge_index.dtype)
+
+    """
+    # create arrays for database data
+    db_node_data.create_array('db', shape=sb.shape, chunks=(db_nodes_per_chunk, 13), dtpe=db.dtype)  # TODO: edit to include actual dimension of array
+    db_node_data.create_array('graph_lookup', shape=db_node_lookup.shape, chunks=db_node_lookup.shape, dtype=db_node_lookup.dtype)
+
+    # create arrays for pharmacophore node data
+    pharm_node_data.create_array('x', shape=x_pharm.shape, chunks=(pharm_nodes_per_chunk, 3), dtype=x_pharm.dtype)
+    pharm_node_data.create_array('a', shape=a_pharm.shape, chunks=(pharm_nodes_per_chunk,), dtype=a_pharm.dtype)
+    pharm_node_data.create_array('graph_lookup', shape=pharm_node_lookup.shape, chunks=pharm_node_lookup.shape, dtype=pharm_node_lookup.dtype)
+    """
+
+    # because node_lookup and edge_lookup are relatively small, we may get away with not chunking them
+    lig_node.create_array('graph_lookup', shape=node_lookup.shape, chunks=node_lookup.shape, dtype=node_lookup.dtype)
+    lig_edge_data.create_array('graph_lookup', shape=edge_lookup.shape, chunks=edge_lookup.shape, dtype=edge_lookup.dtype)
+
+    # write data to the arrays
+    lig_node['x'][:] = x
+    lig_node['a'][:] = a
+    lig_node['c'][:] = c
+    lig_node['graph_lookup'][:] = node_lookup
+
+    lig_edge_data['e'][:] = e
+    lig_edge_data['edge_index'][:] = edge_index
+    lig_edge_data['graph_lookup'][:] = edge_lookup
+
+    """
+    db_node_data['db'][:] = db
+    db_node_data['graph_lookup'][:] = db_lookup
+
+    pharm_node_data['x'][:] = x_pharm
+    pharm_node_data['a'][:] = a_pharm
+    pharm_node_data['graph_lookup'][:] = pharm_node_lookup
+    """
+
+    print(root.tree())
 
 
 
 if __name__ == '__main__':
     args = parse_args()
-
     mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
     name_finder = NameFinder(spoof_db=True) # args.spoof_db
 
-    output_path = './tensor_chunks' # Outout tensor filepath
-
-    # Clean output_path directory
-    for filename in os.listdir(output_path):
-        file_path = os.path.join(output_path, filename)
-        if os.path.isfile(file_path):
-            os.remove(file_path)
 
     batch_size = 10    # Batch size for queries and processing to disk (memory clearing)
     chunks = 0
@@ -348,14 +411,18 @@ if __name__ == '__main__':
         # TODO: Tensorize database name (Somayeh)
         # TODO: Generate pharmacore data using pharmit & convert to tensors (Nate)
         # TODO: Merge tensors
-        
-        
-        # Save tensors to disk 
-        #save_tensors_to_disk(tensors, output_path, chunks, len(mols))   # TODO: Chunk size should probably be determined from the size of the tensor
-        break
-        del mols, smiles, names, positions, atom_types, atom_charges, bond_types, bond_idxs, tensors   # Clear memory after saving
-        gc.collect()  # Clear unused memory
 
+        # Change bond ID representation
+        new_bond_idxs = []
+        for ligand in bond_idxs:
+            bonds = []
+            for i in range(len(ligand[0])):
+                bonds.append([ligand[0][i], ligand[1][i]])
+            new_bond_idxs.append(np.array(bonds))
+        
+
+        # Format and save tensors to disk
+        save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, new_bond_idxs)
         print(f"Processed batch {chunks}, memory cleared")
 
     
