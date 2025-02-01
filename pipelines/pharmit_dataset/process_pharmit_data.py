@@ -11,8 +11,12 @@ import numpy as np
 import gc
 import csv
 import os
+from collections import defaultdict
+
 
 from omtra.data.xae_ligand import MoleculeTensorizer
+from omtra.utils.zarr_utils import list_zarr_arrays
+from omtra.utils.graph import build_lookup_table
 
 # TODO: this script should actually take as input just a hydra config 
 # - but Ramith is setting up our hydra stuff yet, and we don't 
@@ -216,6 +220,56 @@ def batch_generator(iterable, batch_size):
         yield batch
 
 
+def format_tensors(positions, atom_types, atom_charges, bond_types, bond_idxs, databases=None, x_pharm=None, a_pharm=None):
+
+    # Record the number of nodes and edges in each molecule and convert to numpy arrays
+    batch_num_nodes = np.array([x.shape[0] for x in positions])
+    batch_num_databases = np.array([x.shape[0] for x in databases])
+    batch_num_pharm_nodes = np.array([x.shape[0] for x in x_pharm])
+    batch_num_edges = np.array([eidxs.shape[0] for eidxs in bond_idxs])
+
+    # concatenate all the data together
+    x = np.concatenate(positions, axis=0)
+    a = np.concatenate(atom_types, axis=0)
+    c = np.concatenate(atom_charges, axis=0)
+    e = np.concatenate(bond_types, axis=0)
+    edge_index = np.concatenate(bond_idxs, axis=0)
+    
+    db = np.concatenate(databases, axis=0)
+
+    x_pharm = np.concatenate(x_pharm, axis=0)
+    a_pharm = np.concatenate(a_pharm, axis=0)
+
+
+    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
+    node_lookup = build_lookup_table(batch_num_nodes)
+
+    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's edge features
+    edge_lookup = build_lookup_table(batch_num_edges)
+
+    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
+    db_lookup = build_lookup_table(batch_num_databases)
+
+    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
+    pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
+
+    # print("batch_num_nodes:", batch_num_nodes)
+    # print("batch_num_edges:", batch_num_edges)
+    print("Shape of x:", x.shape)
+    print("Shape of a:", a.shape)
+    print("Shape of c:", c.shape)
+    print("Shape of e:", e.shape)
+    print("Shape of edge_index:", edge_index.shape)
+    print("Shape of db:", db.shape)
+    print("Shape of x_pharm:", x_pharm.shape)
+    print("Shape of a_pharm:", a_pharm.shape)
+    print("Shape of node_lookup:", node_lookup.shape)
+    print("Shape of edge_lookup:", edge_lookup.shape)
+    print("Shape of db_lookup:", db_lookup.shape)
+    print("Shape of pharm_node_lookup:", pharm_node_lookup.shape)
+
+
+
 def save_tensors_to_disk(tensors, output_path, chunk_number, chunk_size):
     os.makedirs(output_path, exist_ok=True)
 
@@ -226,6 +280,7 @@ def save_tensors_to_disk(tensors, output_path, chunk_number, chunk_size):
     with open(f"{output_path}/chunk_data.csv", 'a', newline='') as file:   # Save chunk size to csv file
         writer = csv.writer(file)
         writer.writerows(new_row)
+
 
 
 if __name__ == '__main__':
@@ -288,15 +343,16 @@ if __name__ == '__main__':
             conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_xace_idxs]
             smiles = [smile for i, smile in enumerate(smiles) if i not in failed_xace_idxs]
             names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
-    
+
 
         # TODO: Tensorize database name (Somayeh)
         # TODO: Generate pharmacore data using pharmit & convert to tensors (Nate)
         # TODO: Merge tensors
         
+        
         # Save tensors to disk 
         #save_tensors_to_disk(tensors, output_path, chunks, len(mols))   # TODO: Chunk size should probably be determined from the size of the tensor
-
+        break
         del mols, smiles, names, positions, atom_types, atom_charges, bond_types, bond_idxs, tensors   # Clear memory after saving
         gc.collect()  # Clear unused memory
 
