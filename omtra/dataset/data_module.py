@@ -6,6 +6,7 @@ from omegaconf import DictConfig
 
 from omtra.dataset.multitask import MultitaskDataSet
 from omtra.dataset.samplers import MultiTaskSampler
+import torch.multiprocessing as mp
 
 
 class MultiTaskDataModule(pl.LightningDataModule):
@@ -50,6 +51,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         dataloader = DataLoader(self.train_dataset, 
                                 batch_sampler=batch_sampler,
                                 collate_fn=omtra_collate_fn, 
+                                worker_init_fn=worker_init_fn,
                                 num_workers=self.num_workers)
 
         return dataloader
@@ -60,6 +62,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         dataloader = DataLoader(self.val_dataset, 
                                 batch_sampler=batch_sampler,
                                 collate_fn=omtra_collate_fn, 
+                                worker_init_fn=worker_init_fn,
                                 num_workers=self.num_workers)
         return dataloader
 
@@ -68,3 +71,8 @@ def omtra_collate_fn(batch):
     graphs, task_names = zip(*batch)
     g = dgl.batch(graphs)
     return g, task_names[0]
+
+# TODO: overkill because we set start method in train script but just to be safe
+def worker_init_fn(worker_id):
+    """Ensures a fresh start method for each worker."""
+    mp.set_start_method("spawn", force=True)
