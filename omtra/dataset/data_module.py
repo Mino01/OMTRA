@@ -16,7 +16,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
         multitask_dataset_config: DictConfig, 
         graph_config: DictConfig,
         prior_config: dict, 
-        batch_size: int, 
+        edges_per_batch: int, 
         num_workers: int = 0, 
         distributed: bool = False, 
         max_num_edges: int = 40000
@@ -25,10 +25,11 @@ class MultiTaskDataModule(pl.LightningDataModule):
         self.tasks = tasks
         self.multitask_dataset_config = multitask_dataset_config
         self.distributed = distributed
-        self.batch_size = batch_size
+        self.edges_per_batch = edges_per_batch
         self.num_workers = num_workers
         self.prior_config = prior_config
         self.max_num_edges = max_num_edges
+        self.graph_config = graph_config
         self.save_hyperparameters()
 
     def setup(self, stage: str):
@@ -45,7 +46,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                              **self.multitask_dataset_config)
     
     def train_dataloader(self):
-        batch_sampler = MultiTaskSampler(self.train_dataset, self.batch_size)
+        batch_sampler = MultiTaskSampler(self.train_dataset, self.edges_per_batch)
         dataloader = DataLoader(self.train_dataset, 
                                 batch_sampler=batch_sampler,
                                 collate_fn=omtra_collate_fn, 
@@ -55,7 +56,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
     
 
     def val_dataloader(self):
-        batch_sampler = MultiTaskSampler(self.val_dataset, self.batch_size)
+        batch_sampler = MultiTaskSampler(self.val_dataset, self.edges_per_batch)
         dataloader = DataLoader(self.val_dataset, 
                                 batch_sampler=batch_sampler,
                                 collate_fn=omtra_collate_fn, 
@@ -64,4 +65,6 @@ class MultiTaskDataModule(pl.LightningDataModule):
 
 
 def omtra_collate_fn(batch):
-    raise NotImplementedError
+    graphs, task_names = zip(*batch)
+    g = dgl.batch(graphs)
+    return g, task_names[0]

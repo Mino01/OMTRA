@@ -2,6 +2,7 @@ import torch
 import dgl
 from typing import Dict
 import itertools
+from omegaconf import DictConfig
 
 node_types = ['lig', 'prot_atom', 'prot_res', 'pharm']
 
@@ -81,3 +82,19 @@ def build_complex_graph(
             g.edges[etype].data[feature_name] = feature_data
 
     return g
+
+def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[str, int]):
+    src_ntype, etype, dst_ntype = to_canonical_etype(etype)
+    src_n, dst_n = num_nodes_dict[src_ntype], num_nodes_dict[dst_ntype]
+    graph_type = graph_config.edges[etype]['type']
+    if graph_type == 'complete':
+         n_edges = src_n * dst_n
+    elif graph_type == 'knn':
+        k = graph_config.edges[etype]['k']
+        n_edges = src_n * k
+    elif graph_type == 'radius':
+        raise NotImplementedError('have not come up with an approximate number of edges for radius graph')
+    else:
+        raise ValueError(f"Graph type {graph_type} not recognized.")
+    
+    return n_edges

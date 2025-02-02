@@ -10,10 +10,10 @@ from omtra.tasks.tasks import Task
 
 class MultiTaskSampler(Sampler):
 
-    def __init__(self, multi_dataset: MultitaskDataSet, batch_size):
+    def __init__(self, multi_dataset: MultitaskDataSet, edges_per_batch):
         super().__init__()
         self.multi_dataset = multi_dataset
-        self.batch_size = batch_size
+        self.edges_per_batch = edges_per_batch
         
 
         self.task_names = multi_dataset.task_names
@@ -44,6 +44,7 @@ class MultiTaskSampler(Sampler):
 
         for dataset_idx, dataset_name in enumerate(self.dataset_names):
             task_idxs = self.p_dataset_task[:, dataset_idx].nonzero(as_tuple=True)[0]
+            task_idxs = tuple(task_idxs.tolist())
             # tasks = [self.tasks[self.task_names[task_idx]] for task_idx in task_idxs]
 
             if dataset_name == 'pharmit':
@@ -51,7 +52,7 @@ class MultiTaskSampler(Sampler):
                 chunk_tracker_idx = len(self.chunk_trackers)
                 self.chunk_trackers[chunk_tracker_idx] = ChunkTracker(
                     dataset=self.datasets[dataset_name],
-                    nodes_per_batch=self.batch_size
+                    edges_per_batch=self.edges_per_batch
                     )
                 for task_idx in task_idxs:
                     self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx

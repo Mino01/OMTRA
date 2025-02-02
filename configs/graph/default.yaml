@@ -5,7 +5,7 @@ edges:             # parameter for KNN edges
     type: complete
   lig_to_pharm:
     type: knn
-    cutoff: 6
+    k: 6
 
 # enforce certain edge types are symmetric
 symmetric_etypes:

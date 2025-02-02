@@ -27,9 +27,9 @@ def train(cfg: DictConfig):
     # TODO: load dataloader
     # TODO: turn datamodule instantiation and dataloader test into unit tests
     dataloader = datamodule.train_dataloader()
-    n_batches = 2
+    n_batches = 5
     for _ in range(n_batches):
-        batch = next(iter(dataloader))
+        g, task_name = next(iter(dataloader))
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config")

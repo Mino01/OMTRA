@@ -112,7 +112,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         task_name = self.task_names[task_idx]
 
         task = self.task_names[task_idx]
-        g: dgl.DGLHeteroGraph = self.datasets[self.dataset_names[dataset_idx]][(task_idx, local_idx)]
+        g: dgl.DGLHeteroGraph = self.datasets[self.dataset_names[dataset_idx]][(task_name, local_idx)]
 
         # TODO: task specific transforms
         # TODO: do individual datasets need access to the task name? figure out once implementing __getitem__ for individual datasets

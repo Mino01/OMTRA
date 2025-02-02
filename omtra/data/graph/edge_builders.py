@@ -15,5 +15,4 @@ def complete_graph(node_positions):
                              batch=None, 
                              loop=False, 
                              max_num_neighbors=n_nodes+2)
-    assert edge_idxs.shape[1] == 2 
     return edge_idxs

@@ -9,7 +9,7 @@ defaults:
 seed: 42
 
 # global overrides
-batch_size: 32
-num_workers: 4
+edges_per_batch: 12800 # approx 640 edges/gb ram
+num_workers: 0
 
 pharmit_path: ${omtra_root:}/data/pharmit
