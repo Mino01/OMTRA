@@ -15,22 +15,14 @@ class GraphChunkTracker:
         self.construction_args = args
         self.construction_kwargs = kwargs
 
-        # self.reset_queue()
-        # NOTE: we create the chunk queue in the first call to get_batch_idxs
-        # because it requires accessing the chunk_index, which requires a call to the dataset
+        self.chunk_index = self.dataset.retrieve_graph_chunks(*args, **kwargs)
+        self.n_chunks = self.chunk_index.shape[0]
+        self.reset_queue()
 
 
     @property
     def graphs_per_chunk(self):
         return self.dataset.graphs_per_chunk
-    
-    @functools.cached_property
-    def chunk_index(self):
-        return self.dataset.retrieve_graph_chunks(*self.construction_args, **self.construction_kwargs)
-    
-    @property
-    def n_chunks(self):
-        return self.chunk_index.shape[0]
 
     def reset_queue(self):
         self.n_samples_served_this_chunk = 0
@@ -49,10 +41,6 @@ class GraphChunkTracker:
         return idxs
 
     def get_batch_idxs(self, task: Task) -> torch.Tensor:
-
-        if not hasattr(self, 'chunk_queue'):
-            self.reset_queue()
-
         start_idx, end_idx = self.current_chunk_idxs()
         n_graphs_in_chunk = end_idx - start_idx
 

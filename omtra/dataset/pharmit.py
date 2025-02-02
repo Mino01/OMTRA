@@ -155,6 +155,7 @@ class PharmitDataset(ZarrDataset):
         # cover cross-ntype edges
         # there are many problems in how we do this; the user needs to specify configs
         # exactly right or we could end up miscounting edges here, so...tbd
+        # TODO: lig_to_pharm symmetry may be less desireable than pharm_to_lig symmetry
         if len(node_types) == 2:
             assert 'lig_to_pharm' in self.graph_config.symmetric_etypes
             n_edges = approx_n_edges('lig_to_pharm', self.graph_config, n_nodes_dict)
