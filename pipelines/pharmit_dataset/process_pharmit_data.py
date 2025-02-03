@@ -6,7 +6,7 @@ import pymysql
 import itertools
 import re
 
-import pickle
+from rdkit.Chem import AllChem as Chem
 import numpy as np
 import gc
 import csv
@@ -14,6 +14,7 @@ import os
 from collections import defaultdict
 import zarr
 import time
+import subprocess
 
 
 from omtra.data.xae_ligand import MoleculeTensorizer
@@ -222,6 +223,99 @@ def batch_generator(iterable, batch_size):
         yield batch
 
 
+def compute_rmsd(mol1, mol2):
+    return Chem.CalcRMS(mol1, mol2)
+
+
+def minimize_molecule(molecule: Chem.rdchem.Mol):
+
+    # create a copy of the original ligand
+    lig = Chem.Mol(molecule)
+
+    # Add hydrogens
+    lig_H = Chem.AddHs(lig, addCoords=True)
+    Chem.SanitizeMol(lig_H)
+
+    try:
+        ff = Chem.UFFGetMoleculeForceField(lig_H,ignoreInterfragInteractions=False)
+    except Exception as e:
+        print("Failed to get force field:", e)
+        return None
+    
+    before_energy = ff.CalcEnergy()
+
+    # documentation for this function call, incase we want to play with number of minimization steps or record whether it was successful: https://www.rdkit.org/docs/source/rdkit.ForceField.rdForceField.html#rdkit.ForceField.rdForceField.ForceField.Minimize
+    try:
+        ff.Minimize(maxIts=400)
+    except Exception as e:
+        print("Failed to minimize molecule")
+        return None
+
+    after_energy = ff.CalcEnergy()
+
+    # Get the minimized positions for molecule with H's
+    cpos = lig_H.GetConformer().GetPositions()
+
+    # Original ligand with no H's
+    conf = lig.GetConformer()
+
+    for (i,xyz) in enumerate(cpos[-lig.GetNumAtoms():]):
+        conf.SetAtomPosition(i,xyz)
+    
+    print("Done with minimization")
+    # compute rmsd between original and minimized ligand
+    rmsd = compute_rmsd(lig, lig_H)
+    print('rmsd:', rmsd)
+    print('Energy before:', before_energy, ', Energy after:', after_energy)
+    return lig
+
+
+def remove_counterions_batch(mols: list[Chem.Mol]):
+    # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
+    counterions = ['Br', 'I', 'Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
+
+    for idx in range(len(mols)):
+        mol = mols[idx]
+        for i, atom in enumerate(mol.GetAtoms()):
+            if str(atom.GetSymbol()) in counterions:
+                print(f"Atom {atom.GetSymbol()} is a known counterion. Removing and minimizing structure.")
+                mol_cpy = Chem.EditableMol(mol)
+                mol_cpy.RemoveAtom(i)
+                mol_cpy = mol_cpy.GetMol()
+                mol = minimize_molecule(mol_cpy)
+                mols[idx] = mol
+
+
+def get_pharmacophore_data(conformer_files):
+    tmp = 'pharmacophores'
+    phfile = os.path.join(tmp,"ph.json") # File to save pharmacophore data temporarily
+    x_pharm = []
+    a_pharm = []
+    failed_pharm_idxs = []
+
+    for i in range(len(conformer_files)):
+        file = conformer_files[i]
+        # Get pharmacophore data
+        cmd = f'pharmit pharma -in {file} -out {phfile}'   # command for pharmit to get pharmacophore data
+        subprocess.check_call(cmd,shell=True)
+
+        #some files have another json object in them - only take first
+        #in actuality, it is a bug with how pharmit/openbabel is dealing
+        #with gzipped sdf files that causes only one molecule to be read
+        decoder = json.JSONDecoder()
+        ph = decoder.raw_decode(open(phfile).read())[0]
+        
+        # Read generated data into numpy arrays
+        if ph['points']:
+            coords = np.array([(p['x'],p['y'],p['z']) for p in ph['points'] if p['enabled']])
+            type = np.array([ph_type_to_idx[p['name']] for p in ph['points'] if p['enabled']])
+        else:
+            # failed to get data --> store index
+            failed_pharm_idxs.append(i)
+        
+        return x_pharm, a_pharm, failed_pharm_idxs
+
+
 def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_idxs, databases=[np.array([])], x_pharm=[np.array([])], a_pharm=[np.array([])]):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
@@ -362,7 +456,7 @@ if __name__ == '__main__':
 
     batch_size = 10    # Batch size for queries and processing to disk (memory clearing)
     chunks = 0
-
+    
 
     for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
         chunks += 1
@@ -406,6 +500,12 @@ if __name__ == '__main__':
             conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_xace_idxs]
             smiles = [smile for i, smile in enumerate(smiles) if i not in failed_xace_idxs]
             names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
+        
+
+
+        x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files)
+        if len(failed_pharm_idxs) > 0 :
+            print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
 
 
         # TODO: Tensorize database name (Somayeh)
