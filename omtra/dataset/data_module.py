@@ -68,9 +68,9 @@ class MultiTaskDataModule(pl.LightningDataModule):
 
 
 def omtra_collate_fn(batch):
-    graphs, task_names = zip(*batch)
+    graphs, task_names, dataset_names = zip(*batch)
     g = dgl.batch(graphs)
-    return g, task_names[0]
+    return g, task_names[0], dataset_names[0]
 
 # TODO: overkill because we set start method in train script but just to be safe
 def worker_init_fn(worker_id):

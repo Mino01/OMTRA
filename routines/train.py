@@ -32,7 +32,7 @@ def train(cfg: DictConfig):
     dataloader_iter = iter(dataloader)
     n_batches = 5
     for _ in range(n_batches):
-        g, task_name = next(dataloader_iter)
+        g, task_name, dataset_name = next(dataloader_iter)
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config")

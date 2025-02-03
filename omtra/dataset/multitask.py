@@ -119,5 +119,7 @@ class MultitaskDataSet(torch.utils.data.Dataset):
         # TODO: task specific transforms
         # TODO: do individual datasets need access to the task name? figure out once implementing __getitem__ for individual datasets
 
-        return g, task_name
+        dataset_name = self.dataset_names[dataset_idx]
+
+        return g, task_name, dataset_name
 
