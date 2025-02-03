@@ -187,10 +187,10 @@ def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first 
                 if mol is not None:
                     return mol # Changed from break
             if mol is None:
-                print(f"Failed to parse a molecule from {conf_file}")
+                #print(f"Failed to parse a molecule from {conf_file}")
                 return None
         except Exception as e:
-            print("Error parsing file", conf_file)
+            #print("Error parsing file", conf_file)
             return None
 
 
@@ -263,7 +263,6 @@ def minimize_molecule(molecule: Chem.rdchem.Mol):
     for (i,xyz) in enumerate(cpos[-lig.GetNumAtoms():]):
         conf.SetAtomPosition(i,xyz)
     
-    print("Done with minimization")
     # compute rmsd between original and minimized ligand
     rmsd = compute_rmsd(lig, lig_H)
     print('rmsd:', rmsd)
@@ -271,10 +270,7 @@ def minimize_molecule(molecule: Chem.rdchem.Mol):
     return lig
 
 
-def remove_counterions_batch(mols: list[Chem.Mol]):
-    # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
-    counterions = ['Br', 'I', 'Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
-
+def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
     for idx in range(len(mols)):
         mol = mols[idx]
         for i, atom in enumerate(mol.GetAtoms()):
@@ -285,6 +281,9 @@ def remove_counterions_batch(mols: list[Chem.Mol]):
                 mol_cpy = mol_cpy.GetMol()
                 mol = minimize_molecule(mol_cpy)
                 mols[idx] = mol
+
+    return mols
+    
 
 
 def get_pharmacophore_data(conformer_files):
@@ -324,7 +323,7 @@ def get_pharmacophore_data(conformer_files):
     return x_pharm, a_pharm, failed_pharm_idxs
 
 
-def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm=[np.array([])], a_pharm=[np.array([])], databases=[np.array([])]):
+def save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
@@ -352,7 +351,7 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's database locations
-    db_lookup = build_lookup_table(batch_num_db_nodes)
+    db_node_lookup = build_lookup_table(batch_num_db_nodes)
 
     print("Shape of x:", x.shape)
     print("Shape of a:", a.shape)
@@ -365,17 +364,18 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     print("Shape of node_lookup:", node_lookup.shape)
     print("Shape of edge_lookup:", edge_lookup.shape)
     print("Shape of pharm_node_lookup:", pharm_node_lookup.shape)
-    print("Shape of db_lookup:", db_lookup.shape)
+    print("Shape of db_node_lookup:", db_node_lookup.shape)
 
 
     graphs_per_chunk = 50 # very important parameter
     id = str(int(time.time() * 1000))[-8:]
-    store = zarr.storage.LocalStore(f"test_ligand_dataset_{id}.zarr")
+    filename = f"test_ligand_dataset_{id}.zarr"
+    store = zarr.storage.LocalStore(f"{outdir}/{filename}")
 
     # Create a root group
     root = zarr.group(store=store)
 
-    ntypes = ['lig', 'pharm'] # ntypes = ['lig', 'db', 'pharm']
+    ntypes = ['lig', 'db', 'pharm']
 
     ntype_groups = {}
     for ntype in ntypes:
@@ -385,51 +385,39 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     lig_node = ntype_groups['lig'].create_group('node')
     lig_edge_data = ntype_groups['lig'].create_group('edge')
 
-
     pharm_node_data = ntype_groups['pharm'].create_group('node')
-    """
     db_node_data = ntype_groups['db'].create_group('node')
-    """
 
     # Store tensors under different keys with specified chunk sizes
 
     # some simple heuristics to decide chunk sizes for node and edge data
     mean_lig_nodes_per_graph = int(np.mean(batch_num_nodes))
     mean_ll_edges_per_graph = int(np.mean(batch_num_edges))
-    
     mean_pharm_nodes_per_graph = int(np.mean([x.shape[0] for x in x_pharm]))
-    """
     mean_db_nodes_per_graph = int(np.mean(batch_num_db_nodes))
-    """
 
     nodes_per_chunk = graphs_per_chunk * mean_lig_nodes_per_graph
-    ll_edges_per_chunk = graphs_per_chunk * mean_ll_edges_per_graph
-    
+    ll_edges_per_chunk = graphs_per_chunk * mean_ll_edges_per_graph 
     pharm_nodes_per_chunk = graphs_per_chunk * mean_pharm_nodes_per_graph
-    """
-    db_node_per_chunk = graphs_per_chunk * mean_db_nodes_per_graph
-    """
+    db_nodes_per_chunk = graphs_per_chunk * mean_db_nodes_per_graph
 
     # create arrays for node data
     lig_node.create_array('x', shape=x.shape, chunks=(nodes_per_chunk, 3), dtype=x.dtype)
     lig_node.create_array('a', shape=a.shape, chunks=(nodes_per_chunk,), dtype=a.dtype)
     lig_node.create_array('c', shape=c.shape, chunks=(nodes_per_chunk,), dtype=c.dtype)
-
+    
     # create arrays for edge data
     lig_edge_data.create_array('e', shape=e.shape, chunks=(ll_edges_per_chunk,), dtype=e.dtype)
     lig_edge_data.create_array('edge_index', shape=edge_index.shape, chunks=(ll_edges_per_chunk, 2), dtype=edge_index.dtype)
-
 
     # create arrays for pharmacophore node data
     pharm_node_data.create_array('x', shape=x_pharm.shape, chunks=(pharm_nodes_per_chunk, 3), dtype=x_pharm.dtype)
     pharm_node_data.create_array('a', shape=a_pharm.shape, chunks=(pharm_nodes_per_chunk,), dtype=a_pharm.dtype)
     pharm_node_data.create_array('graph_lookup', shape=pharm_node_lookup.shape, chunks=pharm_node_lookup.shape, dtype=pharm_node_lookup.dtype)
 
-    """
     # create arrays for database data
-    db_node_data.create_array('db', shape=sb.shape, chunks=(db_nodes_per_chunk, 13), dtpe=db.dtype)  # TODO: edit to include actual dimension of array
+    db_node_data.create_array('db', shape=db.shape, chunks=(db_nodes_per_chunk,), dtype=db.dtype)  # TODO: edit to include actual dimension of array
     db_node_data.create_array('graph_lookup', shape=db_node_lookup.shape, chunks=db_node_lookup.shape, dtype=db_node_lookup.dtype)
-    """
 
     # because node_lookup and edge_lookup are relatively small, we may get away with not chunking them
     lig_node.create_array('graph_lookup', shape=node_lookup.shape, chunks=node_lookup.shape, dtype=node_lookup.dtype)
@@ -448,12 +436,13 @@ def save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, bond_i
     pharm_node_data['x'][:] = x_pharm
     pharm_node_data['a'][:] = a_pharm
     pharm_node_data['graph_lookup'][:] = pharm_node_lookup
-    """
+    
     db_node_data['db'][:] = db
-    db_node_data['graph_lookup'][:] = db_lookup
-    """
+    db_node_data['graph_lookup'][:] = db_node_lookup
+    
 
     print(root.tree())
+    return filename
 
 
 
@@ -462,11 +451,16 @@ if __name__ == '__main__':
     mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
     name_finder = NameFinder(spoof_db=True) # args.spoof_db
 
+    # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
+    counterions = ['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
+
+    outdir = 'pharmit_data'
+    id = str(int(time.time() * 1000))[-8:]
+    chunk_data = f"{outdir}/data_{id}.txt"
 
     batch_size = 1000    # Batch size for queries and processing to disk (memory clearing)
     chunks = 0
     
-
     for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
         chunks += 1
 
@@ -482,6 +476,9 @@ if __name__ == '__main__':
             print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
             mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
             conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
+
+        # Check for counterions and remove
+        mols = remove_counterions_batch(mols, counterions)
 
 
         # (BATCHED) SMILES representations
@@ -522,7 +519,11 @@ if __name__ == '__main__':
             a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
         
 
+
         # TODO: Tensorize database name (Somayeh)
+        # INPUT: List of
+        # OUTPUT: List of numpy arrays of encodings 
+
 
         # Change bond ID representation
         new_bond_idxs = []
@@ -533,8 +534,15 @@ if __name__ == '__main__':
             new_bond_idxs.append(np.array(bonds))
         
         # Format and save tensors to disk
-        save_tensors_to_zarr(positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm)
-        print(f"Processed batch {chunks}, memory cleared")
+        zarr_store = save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm, [np.array([])])
+        print(f"Processed batch {chunks}")
+        print("––––––––––––––––––––––––––––––––––––––––––––––––")
+
+        # Record number of molecules in zarr store to txt file
+        with open(chunk_data, "a") as file:
+            line = f"{zarr_store} \t {len(mols)} \n"
+            file.write(line)
+
 
 
 
