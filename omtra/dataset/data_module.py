@@ -47,7 +47,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                              **self.multitask_dataset_config)
     
     def train_dataloader(self):
-        batch_sampler = MultiTaskSampler(self.train_dataset, self.edges_per_batch)
+        batch_sampler = MultiTaskSampler(self.train_dataset, self.edges_per_batch, distributed=self.distributed)
         dataloader = DataLoader(self.train_dataset, 
                                 batch_sampler=batch_sampler,
                                 collate_fn=omtra_collate_fn, 
@@ -58,7 +58,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
     
 
     def val_dataloader(self):
-        batch_sampler = MultiTaskSampler(self.val_dataset, self.edges_per_batch)
+        batch_sampler = MultiTaskSampler(self.val_dataset, self.edges_per_batch, distributed=self.distributed)
         dataloader = DataLoader(self.val_dataset, 
                                 batch_sampler=batch_sampler,
                                 collate_fn=omtra_collate_fn, 

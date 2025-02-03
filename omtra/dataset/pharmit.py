@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from omegaconf import DictConfig
 import functools
+import math
 
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.data.graph import build_complex_graph
@@ -96,7 +97,7 @@ class PharmitDataset(ZarrDataset):
 
         return g
     
-    def retrieve_graph_chunks(self):
+    def retrieve_graph_chunks(self, frac_start: float, frac_end: float):
         """
         This dataset contains len(self) examples. We divide all samples (or, graphs) into separate chunk. 
         We call these "graph chunks"; this is not the same thing as chunks defined in zarr arrays.
@@ -112,6 +113,12 @@ class PharmitDataset(ZarrDataset):
         chunk_index[:, 0] = self.graphs_per_chunk*torch.arange(n_chunks)
         chunk_index[:-1, 1] = chunk_index[1:, 0]
         chunk_index[-1, 1] = n_graphs
+
+        # if we need to only expose a subset of chunks (due to distributed training), do so here
+        if not (frac_start == 0.0 and frac_end == 1.0):
+            start_chunk_idx = math.floor(frac_start * n_chunks)
+            end_chunk_idx = math.floor(frac_end * n_chunks)
+            chunk_index = chunk_index[start_chunk_idx:end_chunk_idx]
 
         return chunk_index
     

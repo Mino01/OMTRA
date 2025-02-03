@@ -8,17 +8,24 @@ class GraphChunkTracker:
     def __init__(self, 
                  dataset: ZarrDataset,
                  edges_per_batch: int,
+                 frac_start: float,
+                 frac_end: float,
                  *args, **kwargs):
         
         self.dataset = dataset
         self.edges_per_batch = edges_per_batch # maximum number of nodes in a batch
         self.construction_args = args
         self.construction_kwargs = kwargs
+        self.frac_start = frac_start
+        self.frac_end = frac_end
 
-        self.chunk_index = self.dataset.retrieve_graph_chunks(*args, **kwargs)
+        self.chunk_index = self.dataset.retrieve_graph_chunks(
+            frac_start=self.frac_start,
+            frac_end=self.frac_end,
+            *args, **kwargs)
+        
         self.n_chunks = self.chunk_index.shape[0]
         self.reset_queue()
-
 
     @property
     def graphs_per_chunk(self):
