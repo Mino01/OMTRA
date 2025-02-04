@@ -8,18 +8,16 @@ import re
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
-import gc
-import csv
-import os
 from collections import defaultdict
 import zarr
 import time
-import subprocess
-import json
+
 
 
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
+from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
+from tempfile import TemporaryDirectory
 
 # TODO: this script should actually take as input just a hydra config 
 # - but Ramith is setting up our hydra stuff yet, and we don't 
@@ -282,12 +280,9 @@ def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
     
 
 
-def get_pharmacophore_data(conformer_files):
-    tmp = 'pharmacophores'
-    phfile = os.path.join(tmp,"ph.json") # File to save pharmacophore data temporarily
-    x_pharm = []
-    a_pharm = []
-    failed_pharm_idxs = []
+def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
+
+    # TODO: this should not be hard coded!!!!
     ph_type_to_idx = {'Aromatic': 0,
     'HydrogenDonor': 1,
     'HydrogenAcceptor':2,
@@ -295,28 +290,30 @@ def get_pharmacophore_data(conformer_files):
     'NegativeIon':4,
     'PositiveIon':5}
 
-    for i in range(len(conformer_files)):
-        file = conformer_files[i]
-        
-        # Get pharmacophore data
-        cmd = f'./pharmit pharma -in {file} -out {phfile}'   # command for pharmit to get pharmacophore data
-        subprocess.check_call(cmd,shell=True)
+    # create a temporary directory if one is not provided
+    delete_tmp_dir = False
+    if tmp_path is None:
+        delete_tmp_dir = True
+        tmp_dir = TemporaryDirectory()
+        tmp_path = Path(tmp_dir.name)
 
-        #some files have another json object in them - only take first
-        #in actuality, it is a bug with how pharmit/openbabel is dealing
-        #with gzipped sdf files that causes only one molecule to be read
-        decoder = json.JSONDecoder()
-        ph = decoder.raw_decode(open(phfile).read())[0]
-        
-        # Read generated data into numpy arrays
-        if ph['points']:
-            x_pharm.append(np.array([(p['x'],p['y'],p['z']) for p in ph['points'] if p['enabled']]))
-            a_pharm.append(np.array([ph_type_to_idx[p['name']] for p in ph['points'] if p['enabled']]))
-        else:
-            # Failed to get data --> store index
-            failed_pharm_idxs.append(i)
-        
-    return x_pharm, a_pharm, failed_pharm_idxs
+    # collect all pharmacophore data
+    all_x_pharm = []
+    all_a_pharm = []
+    failed_pharm_idxs = []
+    for idx, conf_file in enumerate(conformer_files):
+        x_pharm, a_pharm = get_lig_only_pharmacophore(conf_file, tmp_path, ph_type_to_idx)
+        if x_pharm is None:
+            failed_pharm_idxs.append(idx)
+            continue
+        all_x_pharm.append(x_pharm)
+        all_a_pharm.append(a_pharm)
+
+    # delete temporary directory if it was created
+    if delete_tmp_dir:
+        tmp_dir.cleanup()
+
+    return all_x_pharm, all_a_pharm, failed_pharm_idxs
 
 
 def save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
@@ -454,7 +451,7 @@ if __name__ == '__main__':
     id = str(int(time.time() * 1000))[-8:]
     chunk_data = f"{outdir}/data_{id}.txt"
 
-    batch_size = 1000    # Batch size for queries and processing to disk (memory clearing)
+    batch_size = args.batch_size # Batch size for queries and processing to disk (memory clearing)
     chunks = 0
     
     for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
@@ -514,25 +511,12 @@ if __name__ == '__main__':
             x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
             a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
         
-
-
         # TODO: Tensorize database name (Somayeh)
         # INPUT: List of
         # OUTPUT: List of numpy arrays of encodings 
-
-
-        # Change bond ID representation
-        new_bond_idxs = []
-        for ligand in bond_idxs:
-            bonds = []
-            for i in range(len(ligand[0])):
-                bonds.append([ligand[0][i], ligand[1][i]])
-            new_bond_idxs.append(np.array(bonds))
-
-            # this could be done in numpy one-liner, but why are we even doing it?
         
         # Format and save tensors to disk
-        zarr_store = save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types, new_bond_idxs, x_pharm, a_pharm, [np.array([])])
+        zarr_store = save_tensors_to_zarr(outdir, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, [np.array([])])
         print(f"Processed batch {chunks}")
         print("––––––––––––––––––––––––––––––––––––––––––––––––")
 
