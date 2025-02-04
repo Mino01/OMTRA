@@ -8,7 +8,7 @@ from typing import Tuple
 def get_lig_only_pharmacophore(sdf_path, tmp_path, ph_type_to_idx) -> Tuple[np.ndarray, np.ndarray]:
     #get pharmacophores from pharmit
     phfile = tmp_path / 'pharmacophore.json'
-    cmd = f'./pharmit pharma -in {sdf_path} -out {phfile}'  # Using executable pharmit file for testing (remove ./)
+    cmd = f'pharmit pharma -in {sdf_path} -out {phfile}'
     subprocess.check_call(cmd,shell=True)
 
     #some files have another json object in them - only take first

@@ -18,7 +18,6 @@ from omtra.utils.graph import build_lookup_table
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from tempfile import TemporaryDirectory
 
-
 # TODO: this script should actually take as input just a hydra config 
 # - but Ramith is setting up our hydra stuff yet, and we don't 
 # yet know what the config for this dataset processing component will look like
@@ -28,7 +27,9 @@ def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
 
     # temporary default path for development
-    p.add_argument('--db_dir', type=Path, default='/net/galaxy/home/koes/icd3/moldiff/OMTRA/pipelines/pharmit_dataset/pharmit_small') # OLD: './pharmit_small/'
+    # don't hard-code a path here. just make a symbolic link to my pharmit_small directory in the same place in your repo,
+    # or run the code with --db_dir=/path/to/pharmit_small
+    p.add_argument('--db_dir', type=Path, default='./pharmit_small/') # OLD: './pharmit_small/'
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
@@ -159,20 +160,21 @@ class NameFinder():
 
         file_to_smile = {Path(file): None for file in conformer_files}  # Dictionary to map conformer file to smile
 
-        try:
-            with self.conn.cursor() as cursor:
-                query = "SELECT sdfloc, smile FROM structures WHERE sdfloc IN %s"
-                cursor.execute(query, (tuple(str(file) for file in conformer_files),))
-                results = cursor.fetchall()
+        # failure will be different than a mysqlerror; there just wont be an entry if the file is not in the database
+        with self.conn.cursor() as cursor:
+            query = "SELECT sdfloc, smile FROM structures WHERE sdfloc IN %s"
+            cursor.execute(query, (tuple(str(file) for file in conformer_files),))
+            results = cursor.fetchall()
 
-            for sdfloc, smile in results:
-                file_smile_map[Path(sdfloc)] = smile  # Update with successfull queries
+        for sdfloc, smile in results:
+            file_to_smile[Path(sdfloc)] = smile  # Update with successfull queries
 
-        except pymysql.MySQLError as e: # Indicate error in finding SMILE using conformer file
-            print(f"Database query failed: {e}")
+        failed_idxs = []
+        for i, file in enumerate(conformer_files):
+            if file_to_smile[Path(file)] is None:
+                failed_idxs.append(i)
         
-        failed_idxs = [conformer_files.index(file) for file in file_to_smile if file_to_smile[file] is None]  # Get the indices of failed file in conformer_files
-        smiles = [smile for file, smile in file_to_smile.items() if smile is not None] # Remove None entries 
+        smiles = [smile for smile in file_to_smile.values() if smile is not None] # Remove None entries 
 
         return smiles, failed_idxs
     
@@ -241,8 +243,6 @@ def minimize_molecule(molecule: Chem.rdchem.Mol):
     except Exception as e:
         print("Failed to get force field:", e)
         return None
-    
-    before_energy = ff.CalcEnergy()
 
     # documentation for this function call, incase we want to play with number of minimization steps or record whether it was successful: https://www.rdkit.org/docs/source/rdkit.ForceField.rdForceField.html#rdkit.ForceField.rdForceField.ForceField.Minimize
     try:
@@ -250,8 +250,6 @@ def minimize_molecule(molecule: Chem.rdchem.Mol):
     except Exception as e:
         print("Failed to minimize molecule")
         return None
-
-    after_energy = ff.CalcEnergy()
 
     # Get the minimized positions for molecule with H's
     cpos = lig_H.GetConformer().GetPositions()
@@ -291,6 +289,30 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
     'NegativeIon':4,
     'PositiveIon':5}
 
+    # create a temporary directory if one is not provided
+    delete_tmp_dir = False
+    if tmp_path is None:
+        delete_tmp_dir = True
+        tmp_dir = TemporaryDirectory()
+        tmp_path = Path(tmp_dir.name)
+
+    # collect all pharmacophore data
+    all_x_pharm = []
+    all_a_pharm = []
+    failed_pharm_idxs = []
+    for idx, conf_file in enumerate(conformer_files):
+        x_pharm, a_pharm = get_lig_only_pharmacophore(conf_file, tmp_path, ph_type_to_idx)
+        if x_pharm is None:
+            failed_pharm_idxs.append(idx)
+            continue
+        all_x_pharm.append(x_pharm)
+        all_a_pharm.append(a_pharm)
+
+    # delete temporary directory if it was created
+    if delete_tmp_dir:
+        tmp_dir.cleanup()
+
+    return all_x_pharm, all_a_pharm, failed_pharm_idxs
     # create a temporary directory if one is not provided
     delete_tmp_dir = False
     if tmp_path is None:
@@ -387,7 +409,7 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
 if __name__ == '__main__':
     args = parse_args()
     mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
-    name_finder = NameFinder(spoof_db=True) # args.spoof_db
+    name_finder = NameFinder(spoof_db=args.spoof_db) 
 
     # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
     counterions = ['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
@@ -468,8 +490,6 @@ if __name__ == '__main__':
             x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
             a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
         
-
-
         # TODO: Tensorize database name (Somayeh)
         # INPUT: List of database sources
         # OUTPUT: List of numpy arrays of one-hot encodings 
