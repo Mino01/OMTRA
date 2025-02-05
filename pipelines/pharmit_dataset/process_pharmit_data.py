@@ -5,7 +5,6 @@ from rdkit import Chem
 import pymysql
 import itertools
 import re
-import numpy as np
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
