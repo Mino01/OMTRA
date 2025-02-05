@@ -23,6 +23,9 @@ from tempfile import TemporaryDirectory
 # yet know what the config for this dataset processing component will look like
 # so for now just argparse, and once its written it'll be easy/concrete to 
 # port into a hydra config
+
+print('i am a new feature')
+
 def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
 
