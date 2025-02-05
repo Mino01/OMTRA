@@ -314,8 +314,6 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
 
     return all_x_pharm, all_a_pharm, failed_pharm_idxs
     
-    # Define the list of databases
-DATABASES = ["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"]    
 def generate_library_tensor(names, databases=DATABASES):
     """
     Generates a binary tensor indicating whether each molecule belongs to any of the specified libraries.
@@ -420,7 +418,10 @@ if __name__ == '__main__':
 
     # Known counterions: https://www.sciencedirect.com/topics/chemistry/counterion#:~:text=About%2070%25%20of%20the%20counter,most%20common%20cation%20is%20Na%2B.
     counterions = ['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn']
-
+    
+    # Define the list of databases
+    DATABASES = ["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"]  
+    
     batch_size = args.batch_size # Batch size for queries and processing to disk (memory clearing)
     chunks = 0
 
