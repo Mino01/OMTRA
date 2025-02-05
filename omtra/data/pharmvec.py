@@ -1,6 +1,6 @@
 import numpy as np
 
-def GetAromaticFeatVects(atomsLoc, featLoc, scale: float = 1.0):
+def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False, scale: float = 1.0):
     """Compute the direction vector for an aromatic feature."""
     
     v1 = atomsLoc[0] - featLoc
@@ -10,7 +10,11 @@ def GetAromaticFeatVects(atomsLoc, featLoc, scale: float = 1.0):
     normal = normal / np.linalg.norm(normal)
     normal *= scale
     
-    return normal
+    if return_both:
+        normal2 = normal * -1
+        return [normal, normal2]
+    else:
+        return [normal]
 
 
 def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
@@ -26,7 +30,7 @@ def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
             vec = vec / np.linalg.norm(vec)
             vectors.append(vec)
         
-    return np.mean(vectors)
+    return vectors
 
 
 def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
@@ -43,7 +47,6 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
             vec = vec / np.linalg.norm(vec)
             vectors.append(vec)
             found_vec = True
-            break
 
     if not found_vec:
         # compute average direction of bonds and reverse it

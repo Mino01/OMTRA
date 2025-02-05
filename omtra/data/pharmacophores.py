@@ -30,15 +30,15 @@ def get_smarts_matches(rdmol, smarts_pattern):
     feature_positions = []
     atom_positions = []
     smarts_mol = Chem.MolFromSmarts(smarts_pattern)
-    rd_matches = rdmol.GetSubstructMatches(smarts_mol, uniquify=True)
-    for match in rd_matches:
+    matches = rdmol.GetSubstructMatches(smarts_mol, uniquify=True)
+    for match in matches:
         atoms = [np.array(rdmol.GetConformer().GetAtomPosition(idx)) for idx in match]
         feature_location = np.mean(atoms, axis=0)
         
         atom_positions.append(atoms)
         feature_positions.append(feature_location)
 
-    return rd_matches, atom_positions, feature_positions
+    return matches, atom_positions, feature_positions
 
 # get the vectors for all matches of a smarts pattern
 def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
