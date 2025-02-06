@@ -1,0 +1,18 @@
+# test_config.yaml used for unit/integration testing.
+# Had to seperate out this yaml as we might need to do frequent tests as we introduce a new module
+
+defaults:
+# we just need three things to train on: a model, a trainer and a group of tasks
+  - _self_
+  - model: default
+  - trainer: default
+  - task_group: no_protein
+  - graph: default
+
+seed: 42
+
+# global overrides
+edges_per_batch: 12800 # approx 640 edges/gb ram
+num_workers: 3
+
+pharmit_path: ${omtra_root:}/data/pharmit
