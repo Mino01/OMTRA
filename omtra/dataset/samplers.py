@@ -20,14 +20,14 @@ class MultiTaskSampler(Sampler):
         self.multi_dataset = multi_dataset
         self.edges_per_batch = edges_per_batch
         
-
+        self.distributed = distributed
         self.task_names = multi_dataset.task_names
         self.tasks: List[Task] = multi_dataset.tasks
         self.datasets = multi_dataset.datasets
         self.dataset_names = multi_dataset.dataset_names
         self.p_dataset_task = multi_dataset.p_dataset_task
 
-        if distributed:
+        if self.distributed:
             self.num_replicas = num_replicas if num_replicas is not None else torch.distributed.get_world_size()
             self.rank = rank if rank is not None else torch.distributed.get_rank()
 
