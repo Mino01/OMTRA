@@ -1,4 +1,5 @@
 import os
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,6 +12,7 @@ from omtra.data.xace_ligand import MoleculeTensorizer
 from plinder.core import PlinderSystem
 from rdkit import Chem
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class StructureData:
@@ -19,18 +21,17 @@ class StructureData:
     res_ids: np.ndarray
     res_names: np.ndarray
     chain_ids: np.ndarray
-    res_idx: Optional[np.ndarray] = None
     cif: Optional[str] = None
 
 
 @dataclass
 class LigandData:
-    sdf: str
     coords: np.ndarray
     atom_types: np.ndarray
     atom_charges: np.ndarray
-    bond_types: Optional[np.ndarray]
-    bond_indices: Optional[np.ndarray]
+    bond_types: np.ndarray
+    bond_indices: np.ndarray
+    sdf: str
 
 
 class PDBWriter:
@@ -38,6 +39,7 @@ class PDBWriter:
         self.chain_mapping = chain_mapping
 
     def write(self, struct_data: StructureData, output_path: str):
+        logger.info("Writing structure to %s", output_path)
         struct = struc.AtomArray(len(struct_data.coords))
 
         struct.coord = struct_data.coords
@@ -62,6 +64,7 @@ class StructureProcessor:
         n_cpus: int = 1,
         raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
+        logger.info("Initializing StructureProcessor with cutoff=%f", pocket_cutoff)
         self.atom_map = atom_map
         self.pocket_cutoff = pocket_cutoff
         self.tensorizer = MoleculeTensorizer(atom_map=atom_map, n_cpus=n_cpus)
@@ -117,8 +120,8 @@ class StructureProcessor:
                 coords=positions[i],
                 atom_types=atom_types[i],
                 atom_charges=atom_charges[i],
-                bond_types=bond_types[i] if bond_types[i] is not None else None,
-                bond_indices=bond_idxs[i] if bond_idxs[i] is not None else None,
+                bond_types=bond_types[i],
+                bond_indices=bond_idxs[i]
             )
 
         return ligands_data
@@ -126,6 +129,7 @@ class StructureProcessor:
     def extract_pocket(
         self, receptor: struc.AtomArray, ligand_coords: np.ndarray
     ) -> StructureData:
+        logger.debug("Extracting pocket")
         receptor_cell_list = struc.CellList(receptor, cell_size=self.pocket_cutoff)
 
         close_atom_indices = []
@@ -142,21 +146,16 @@ class StructureProcessor:
             res_mask = (receptor.res_id == res_id) & (receptor.chain_id == chain_id)
             res_indices = np.where(res_mask)[0]
             pocket_indices.extend(res_indices)
-
-        unique_res_ids = sorted(set(receptor.res_id[pocket_indices]))
-        res_id_to_idx = {res_id: idx for idx, res_id in enumerate(unique_res_ids)}
-        pocket_res_idx = np.array(
-            [res_id_to_idx[res_id] for res_id in receptor.res_id[pocket_indices]],
-            dtype=np.int64,
-        )
+        
+        if len(pocket_indices) == 0:
+            return None
 
         return StructureData(
             coords=receptor.coord[pocket_indices],
             atom_names=receptor.atom_name[pocket_indices],
             res_ids=receptor.res_id[pocket_indices],  # original residue ids
             res_names=receptor.res_name[pocket_indices],
-            chain_ids=receptor.chain_id[pocket_indices],
-            res_idx=pocket_res_idx,  # 0-indexed pocket residue ids
+            chain_ids=receptor.chain_id[pocket_indices]
         )
 
 
@@ -167,15 +166,44 @@ class SystemProcessor:
         pocket_cutoff: float = 8.0,
         raw_data: str = "/net/galaxy/home/koes/tjkatz/.local/share/plinder/2024-06/v2",
     ):
+        logger.info("Initializing SystemProcessor with cutoff=%f", pocket_cutoff)
         self.structure_processor = StructureProcessor(
             atom_map, pocket_cutoff=pocket_cutoff, raw_data=raw_data
         )
         self.pdb_writer = None
+    
+    def filter_ligands(self, system):
+        entry_annotation = system.entry
+        system_annotation = system.system
+
+        ligands_to_filter = []
+        for ligand in system_annotation["ligands"]:
+            crystal_contacts = set()
+
+            for res, contacts in ligand["crystal_contacts"].items():
+                crystal_contacts.update(contacts)
+
+            if len(crystal_contacts) > 60:
+                lig_key = ligand["biounit_id"] + "." + ligand["asym_id"]
+                ligands_to_filter.append(lig_key)
+
+        ligand_paths = []
+        for ligand_key, path in system.ligand_sdfs.items():
+            if ligand_key not in ligands_to_filter:
+                ligand_paths.append(path)
+            else:
+                logger.warning("Skipping ligand %s", path)
+        
+        return ligand_paths
+
 
     def process_system(self, system_id: str, save_pockets: bool = False) -> Dict:
+        logger.info("Processing system %s", system_id)
+
         system = PlinderSystem(system_id=system_id)
         receptor_path = system.receptor_cif
-        ligand_paths = list(system.ligand_sdfs.values())
+
+        ligand_paths = self.filter_ligands(system)
 
         # Get apo paths
         apo_ids = system.linked_structures[system.linked_structures["kind"] == "apo"][
@@ -254,10 +282,18 @@ class SystemProcessor:
 
         # Process pockets
         pockets_data = {}
+        ligands_to_remove = []
         for ligand_key, ligand in ligands_data.items():
             pocket_data = self.structure_processor.extract_pocket(
                 receptor, ligand.coords
             )
+
+            if not pocket_data:
+                logger.warning("No pocket extracted for %s", ligand.sdf)
+                ligands_to_remove.append(ligand_key)
+                continue
+
+            logger.info("Extracted pocket with %d atoms for %s", len(pocket_data.coords), ligand.sdf)
 
             if save_pockets:
                 output_dir = os.path.dirname(receptor_path)
@@ -266,11 +302,15 @@ class SystemProcessor:
 
             pockets_data[ligand_key] = pocket_data
 
+        for ligand_key in ligands_to_remove:
+            del ligands_data[ligand_key]
+
         # Process apo structures
         apo_structures = {}
         if apo_paths:
             for apo_path in apo_paths:
                 apo_key = Path(apo_path).parent.name
+                logger.info("Processing apo structure %s", apo_path)
                 apo_struct, cif = self.structure_processor.load_structure(apo_path)
                 apo_structures[apo_key] = self.structure_processor.process_structure(
                     apo_struct, cif
@@ -281,6 +321,7 @@ class SystemProcessor:
         if pred_paths:
             for pred_path in pred_paths:
                 pred_key = Path(pred_path).parent.name
+                logger.info("Processing pred structure %s", pred_path)
                 pred_struct, cif = self.structure_processor.load_structure(pred_path)
                 pred_structures[pred_key] = self.structure_processor.process_structure(
                     pred_struct, cif
