@@ -25,6 +25,24 @@ smarts_patterns = {
     ]
 }
 
+matching_types = {
+    'Aromatic': ['Aromatic', 'PositiveIon'],
+    'HydrogenDonor': ['HydrogenAcceptor'],
+    'HydrogenAcceptor': ['HydrogenDonor'],
+    'PositiveIon': ['NegativeIon', 'Aromatic'],
+    'NegativeIon': ['PositiveIon'],
+    'Hydrophobic': ['Hydrophobic']
+}
+
+matching_distance = {
+    "Aromatic": 7,
+    "Hydrophobic": 5,
+    "HydrogenAcceptor": 4,
+    "HydrogenDonor": 4,
+    "NegativeIon": 5,
+    "PositiveIon": 5
+}
+
 def get_smarts_matches(rdmol, smarts_pattern):
     """Find positions of a SMARTS pattern in molecule."""
     feature_positions = []
@@ -45,7 +63,7 @@ def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
     vectors = []
     for featAtoms, atomsLoc, featLoc in zip(atom_idxs, atom_positions, feature_positions):
         if feature == 'Aromatic':
-            vectors.append(GetAromaticFeatVects(atomsLoc, featLoc, scale=1.0)[0]) #pick one of the vectors
+            vectors.append(GetAromaticFeatVects(atomsLoc, featLoc, scale=1.0))
         elif feature == 'HydrogenDonor':
             vectors.append(GetDonorFeatVects(featAtoms, atomsLoc, mol))
         elif feature == 'HydrogenAcceptor':
@@ -54,29 +72,61 @@ def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
             vectors.append(np.zeros(3))
     return vectors
 
+def check_interaction(all_ligand_positions, receptor, feature):
+    """
+    Check if the ligand features interact with matching receptor feature
+    """
+    paired_features = matching_types[feature]
+    
+    all_receptor_positions = []
+    for paired_feature in paired_features:
+        for rec_pattern in smarts_patterns[paired_feature]:
+            _, _, rec_feature_positions = get_smarts_matches(receptor, rec_pattern)
+            all_receptor_positions.extend(rec_feature_positions)
 
-def get_pharmacophore_dict(mol):
+    feature_cutoff = matching_distance[feature]
+    interaction = []
+    for pos in all_ligand_positions:
+        distances = cdist(pos, all_receptor_positions)
+        mask = distances <= feature_cutoff
+        interaction.append(np.any(mask))
+
+    return interaction
+
+def get_pharmacophore_dict(ligand, receptor=None):
     """Extract pharmacophores and direction vectors from RDKit molecule.
         
     Returns
     -------
     dictionary : {'FeatureName' : {
                                    'P': [(coord), ... ],
-                                   'V': [(vec), ... ]
+                                   'V': [(vec), ... ],
+                                   'I': [True/False, ...] # if receptor
                                    }
                  }
     """
     
-    pharmacophores = {feature: {'P': [], 'V': []} for feature in smarts_patterns}
+    pharmacophores = {feature: {'P': [], 'V': [], 'I': []} for feature in smarts_patterns}
 
     for feature, patterns in smarts_patterns.items():
+        all_ligand_positions = []
+        all_ligand_vectors = []
+        
         for pattern in patterns:
-            atom_idxs, atom_positions, feature_positions = get_smarts_matches(mol, pattern)
+            atom_idxs, atom_positions, feature_positions = get_smarts_matches(ligand, pattern)
             if feature_positions:
-                vectors = get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions)
-                pharmacophores[feature]['P'].extend(feature_positions)
-                pharmacophores[feature]['V'].extend(vectors)
-
+                vectors = get_vectors(ligand, feature, atom_idxs, atom_positions, feature_positions)
+                all_ligand_positions.extend(feature_positions)
+                all_ligand_vectors.extend(vectors)
+        
+        if all_ligand_positions:
+            pharmacophores[feature]['P'].extend(all_ligand_positions)
+            pharmacophores[feature]['V'].extend(all_ligand_vectors)
+            
+            if receptor:
+                interaction = check_interaction(all_ligand_positions, receptor, feature)
+                pharmacophores[feature]['I'].extend(interaction)
+                
     return pharmacophores
 
 '''

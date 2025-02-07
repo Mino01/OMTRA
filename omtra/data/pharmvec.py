@@ -1,4 +1,5 @@
 import numpy as np
+from rdkit.Chem.Features import FeatDirUtilsRD as FeatDirUtils
 
 def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False, scale: float = 1.0):
     """Compute the direction vector for an aromatic feature."""
@@ -33,9 +34,14 @@ def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
     return vectors
 
 
-def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
+def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol, scale: float = 1.0):
     atom_idx = featAtoms[0]
     atom_coords = atomsLoc[0]
+    atom = rdmol.GetAtomWithIdx(atom_idx)
+    nbrs = atom.GetNeighbors()
+    conf = rdmol.GetConformer()
+    
+    ''' # pharmit
     vectors = []
     found_vec = False
 
@@ -48,8 +54,62 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
             vectors.append(vec)
             found_vec = True
 
-    if not found_vec:
-        # compute average direction of bonds and reverse it
+    '''
+    
+    # from rdkit/Chem/Features/FeatDirUtilsRD.py
+    
+    hydrogens = []
+    heavy = []
+    for nbr in nbrs:
+        if nbr.GetAtomicNum() == 1:
+            hydrogens.append(nbr)
+        else:
+            heavy.append(nbr)
+
+    cpt = conf.GetAtomPosition(atom_idx)
+    
+    if atom.GetAtomicNum() == 8: # two lone pairs
+        heavy_nbr = heavy[0]
+        if len(nbrs) == 1: # sp2
+            for a in heavy_nbr.GetNeighbors():
+                if a.GetIdx() != atom_idx:
+                    heavy_nbr_nbr = a # heavy atom's neighbor that isn't the acceptor
+                    break
+
+            pt1 = conf.GetAtomPosition(heavy_nbr_nbr.GetIdx())
+            v1 = conf.GetAtomPosition(heavy_nbr.GetIdx())
+            pt1 -= v1
+            v1 -= cpt
+            rotAxis = v1.CrossProduct(pt1)
+            rotAxis.Normalize()
+            bv1 = FeatDirUtils.ArbAxisRotation(120, rotAxis, v1)
+            bv1.Normalize()
+            bv1 *= scale
+            bv2 = FeatDirUtils.ArbAxisRotation(-120, rotAxis, v1)
+            bv2.Normalize()
+            bv2 *= scale
+            return [np.array(bv1), np.array(bv2)]
+
+        elif len(nbrs) == 2: # sp3
+            bvec = FeatDirUtils._findAvgVec(conf, cpt, nbrs)
+            bvec *= (-1.0 * scale)
+            # we will create two vectors by rotating bvec by half the tetrahedral angle in either directions
+            v1 = conf.GetAtomPosition(nbrs[0].GetIdx())
+            v1 -= cpt
+            v2 = conf.GetAtomPosition(nbrs[1].GetIdx())
+            v2 -= cpt
+            rotAxis = v1 - v2
+            rotAxis.Normalize()
+            bv1 = FeatDirUtils.ArbAxisRotation(54.5, rotAxis, bvec)
+            bv2 = FeatDirUtils.ArbAxisRotation(-54.5, rotAxis, bvec)
+            bv1.Normalize()
+            bv2.Normalize()
+            bv1 *= scale
+            bv2 *= scale
+            return [np.array(bv1), np.array(bv2)]
+        
+    else:  
+        # take average direction of bonds and reverse it
         ave_bond = np.zeros(3)
         cnt = 0
         
@@ -60,8 +120,6 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
         
         if cnt > 0:
             ave_bond /= cnt
-            ave_bond *= -1  # reverse the direction
+            ave_bond *= -1
             ave_bond = ave_bond / np.linalg.norm(ave_bond)
-            vectors.append(ave_bond)
-
-    return vectors
+            return [ave_bond]
