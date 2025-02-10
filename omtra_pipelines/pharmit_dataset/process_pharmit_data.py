@@ -460,7 +460,6 @@ if __name__ == '__main__':
     with Pool() as pool:
         for chunk, _ in enumerate(pool.starmap(process_batch, ((conformer_files, i+1) for i, conformer_files in enumerate(batch_generator(crawl_conformer_files(args.db_dir), args.batch_size))))):
             print(f"Processed batch {chunk+1}")
-            print("––––––––––––––––––––––––––––––––––––––––––––––––")
     
     
 
