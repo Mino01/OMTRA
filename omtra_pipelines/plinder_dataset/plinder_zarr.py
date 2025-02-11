@@ -33,81 +33,109 @@ class PlinderZarrConverter:
         self.lig_chunk_size = lig_chunk_size
         self.num_workers = num_workers or mp.cpu_count()
 
-        self.store = zarr.storage.LocalStore(str(self.output_path))
-        self.root = zarr.group(store=self.store)
+        if not self.output_path.exists():
+            self.store = zarr.storage.LocalStore(str(self.output_path))
+            self.root = zarr.group(store=self.store)
 
-        self.receptor = self.root.create_group("receptor")
-        self.apo = self.root.create_group("apo")
-        self.pred = self.root.create_group("pred")
-        self.pocket = self.root.create_group("pocket")
+            self.receptor = self.root.create_group("receptor")
+            self.apo = self.root.create_group("apo")
+            self.pred = self.root.create_group("pred")
+            self.pocket = self.root.create_group("pocket")
 
-        for group in [self.receptor, self.apo, self.pred, self.pocket]:
-            chunk = self.struc_chunk_size
-            if group == self.pocket:
-                chunk = self.lig_chunk_size
+            for group in [self.receptor, self.apo, self.pred, self.pocket]:
+                chunk = self.struc_chunk_size
+                if group == self.pocket:
+                    chunk = self.lig_chunk_size
 
-            group.create_array(
-                "coords", shape=(0, 3), chunks=(chunk, 3), dtype=np.float32
-            )
-            group.create_array(
-                "atom_names",
-                shape=(0,),
-                chunks=(chunk,),
-                dtype=str,
-                compressors=None,
-            )
-            group.create_array("res_ids", shape=(0,), chunks=(chunk,), dtype=np.int32)
-            group.create_array(
-                "res_names",
-                shape=(0,),
-                chunks=(chunk,),
-                dtype=str,
-                compressors=None,
-            )
-            group.create_array(
-                "chain_ids",
-                shape=(0,),
-                chunks=(chunk,),
-                dtype=str,
-                compressors=None,
-            )
+                group.create_array(
+                    "coords", shape=(0, 3), chunks=(chunk, 3), dtype=np.float32
+                )
+                group.create_array(
+                    "atom_names",
+                    shape=(0,),
+                    chunks=(chunk,),
+                    dtype=str,
+                    compressors=None,
+                )
+                group.create_array("res_ids", shape=(0,), chunks=(chunk,), dtype=np.int32)
+                group.create_array(
+                    "res_names",
+                    shape=(0,),
+                    chunks=(chunk,),
+                    dtype=str,
+                    compressors=None,
+                )
+                group.create_array(
+                    "chain_ids",
+                    shape=(0,),
+                    chunks=(chunk,),
+                    dtype=str,
+                    compressors=None,
+                )
 
-        self.ligand = self.root.create_group("ligand")
-        self.npnde = self.root.create_group("npnde")
+            self.ligand = self.root.create_group("ligand")
+            self.npnde = self.root.create_group("npnde")
 
-        for group in [self.ligand, self.npnde]:
-            group.create_array(
-                "coords",
-                shape=(0, 3),
-                chunks=(self.lig_chunk_size, 3),
-                dtype=np.float32,
-            )
-            group.create_array(
-                "atom_types", shape=(0,), chunks=(self.lig_chunk_size,), dtype=np.int32
-            )
-            group.create_array(
-                "atom_charges",
-                shape=(0,),
-                chunks=(self.lig_chunk_size,),
-                dtype=np.float32,
-            )
-            group.create_array(
-                "bond_types", shape=(0,), chunks=(self.lig_chunk_size,), dtype=np.int32
-            )
-            group.create_array(
-                "bond_indices",
-                shape=(0, 2),
-                chunks=(self.lig_chunk_size, 2),
-                dtype=np.int32,
-            )
+            for group in [self.ligand, self.npnde]:
+                group.create_array(
+                    "coords",
+                    shape=(0, 3),
+                    chunks=(self.lig_chunk_size, 3),
+                    dtype=np.float32,
+                )
+                group.create_array(
+                    "atom_types", shape=(0,), chunks=(self.lig_chunk_size,), dtype=np.int32
+                )
+                group.create_array(
+                    "atom_charges",
+                    shape=(0,),
+                    chunks=(self.lig_chunk_size,),
+                    dtype=np.float32,
+                )
+                group.create_array(
+                    "bond_types", shape=(0,), chunks=(self.lig_chunk_size,), dtype=np.int32
+                )
+                group.create_array(
+                    "bond_indices",
+                    shape=(0, 2),
+                    chunks=(self.lig_chunk_size, 2),
+                    dtype=np.int32,
+                )
 
-        # Initialize lookup tables
-        self.receptor_lookup = []  # [{system_id, receptor_idx, start, end, ligand_idxs, npnde_idxs, pocket_idxs, apo_idxs, pred_idxs, cif}]
-        self.apo_lookup = []  # [{system_id, apo_id, receptor_idx, apo_idx, start, end, cif}]
-        self.pred_lookup = []  # [{system_id, pred_id, receptor_idx, pred_idx, start, end, cif}]
-        self.ligand_lookup = []  # [{system_id, ligand_id, receptor_idx, ligand_idx, ligand_num, atom_start, atom_end, bond_start, bond_end, sdf}]
-        self.pocket_lookup = []  # [{system_id, pocket_id, receptor_idx, pocket_idx, pocket_num, start, end}]
-        self.npnde_lookup = []  # [{system_id, npnde_id, receptor_idx, npnde_idx, atom_start, atom_end, bond_start, bond_end, sdf}]
+            # Initialize lookup tables
+            self.root.attrs["receptor_lookup"] = []
+            self.root.attrs["apo_lookup"] = []
+            self.root.attrs["pred_lookup"] = []
+            self.root.attrs["ligand_lookup"] = []
+            self.root.attrs["pocket_lookup"] = []
+            self.root.attrs["npnde_lookup"] = []
+            self.root.attrs["chunk_sizes"] = []
+            self.root.attrs["system_type_idxs"] = []
+
+            self.receptor_lookup = self.root.attrs["receptor_lookup"] # [{system_id, receptor_idx, start, end, ligand_idxs, npnde_idxs, pocket_idxs, apo_idxs, pred_idxs, cif}]
+            self.apo_lookup = self.root.attrs["apo_lookup"] # [{system_id, apo_id, receptor_idx, apo_idx, start, end, cif}]
+            self.pred_lookup = self.root.attrs["pred_lookup"] # [{system_id, pred_id, receptor_idx, pred_idx, start, end, cif}]
+            self.ligand_lookup = self.root.attrs["ligand_lookup"] # [{system_id, ligand_id, receptor_idx, ligand_idx, ligand_num, atom_start, atom_end, bond_start, bond_end, sdf}]
+            self.pocket_lookup = self.root.attrs["pocket_lookup"] # [{system_id, pocket_id, receptor_idx, pocket_idx, pocket_num, start, end}]
+            self.npnde_lookup = self.root.attrs["npnde_lookup"] # [{system_id, npnde_id, receptor_idx, npnde_idx, atom_start, atom_end, bond_start, bond_end, sdf}]
+        
+        else:
+            self.root = zarr.open_group(store=str(self.output_path), mode='r+')
+            
+            self.receptor = self.root['receptor']
+            self.apo = self.root['apo']
+            self.pred = self.root['pred']
+            self.pocket = self.root['pocket']
+            self.ligand = self.root['ligand']
+            self.npnde = self.root['npnde']
+            
+            self.receptor_lookup = self.root.attrs["receptor_lookup"]
+            self.apo_lookup = self.root.attrs["apo_lookup"]
+            self.pred_lookup = self.root.attrs["pred_lookup"]
+            self.ligand_lookup = self.root.attrs["ligand_lookup"]
+            self.pocket_lookup = self.root.attrs["pocket_lookup"]
+            self.npnde_lookup = self.root.attrs["npnde_lookup"]
+
 
     def _append_structure_data(
         self, group: zarr.Group, data: StructureData
@@ -369,15 +397,6 @@ class PlinderZarrConverter:
 
             result_queue.put(None)
             writer_thread.join()
-
-        # Store lookup tables as attributes
-        self.root.attrs["receptor_lookup"] = self.receptor_lookup
-        self.root.attrs["apo_lookup"] = self.apo_lookup
-        self.root.attrs["pred_lookup"] = self.pred_lookup
-        self.root.attrs["ligand_lookup"] = self.ligand_lookup
-        self.root.attrs["pocket_lookup"] = self.pocket_lookup
-        self.root.attrs["npnde_lookup"] = self.npnde_lookup
-
 
 def load_lookups(
     zarr_path: str = None, root: zarr.Group = None
