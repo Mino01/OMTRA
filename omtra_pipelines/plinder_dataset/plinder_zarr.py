@@ -1,19 +1,19 @@
-import zarr
-import numpy as np
-import pandas as pd
 import logging
 import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor
 import queue
 import threading
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
+import numpy as np
+import pandas as pd
+import zarr
+from numcodecs import VLenUTF8
+from omtra_pipelines.plinder_dataset.plinder_pipeline import (LigandData,
+                                                              StructureData,
+                                                              SystemProcessor)
 from tqdm import tqdm
-from omtra_pipelines.plinder_dataset.plinder_pipeline import (
-    SystemProcessor,
-    StructureData,
-    LigandData,
-)
 
 logger = logging.getLogger(__name__)
 
