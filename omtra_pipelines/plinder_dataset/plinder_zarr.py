@@ -10,9 +10,11 @@ import numpy as np
 import pandas as pd
 import zarr
 from numcodecs import VLenUTF8
-from omtra_pipelines.plinder_dataset.plinder_pipeline import (LigandData,
-                                                              StructureData,
-                                                              SystemProcessor)
+from omtra_pipelines.plinder_dataset.plinder_pipeline import (
+    LigandData,
+    StructureData,
+    SystemProcessor,
+)
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -25,12 +27,14 @@ class PlinderZarrConverter:
         system_processor: SystemProcessor,
         struc_chunk_size: int = 235000,
         lig_chunk_size: int = 2000,
+        category: str = None,
         num_workers: int = None,
     ):
         self.output_path = Path(output_path)
         self.system_processor = system_processor
         self.struc_chunk_size = struc_chunk_size
         self.lig_chunk_size = lig_chunk_size
+        self.category = category
         self.num_workers = num_workers or mp.cpu_count()
 
         if not self.output_path.exists():
@@ -57,7 +61,9 @@ class PlinderZarrConverter:
                     dtype=str,
                     compressors=None,
                 )
-                group.create_array("res_ids", shape=(0,), chunks=(chunk,), dtype=np.int32)
+                group.create_array(
+                    "res_ids", shape=(0,), chunks=(chunk,), dtype=np.int32
+                )
                 group.create_array(
                     "res_names",
                     shape=(0,),
@@ -84,7 +90,10 @@ class PlinderZarrConverter:
                     dtype=np.float32,
                 )
                 group.create_array(
-                    "atom_types", shape=(0,), chunks=(self.lig_chunk_size,), dtype=np.int32
+                    "atom_types",
+                    shape=(0,),
+                    chunks=(self.lig_chunk_size,),
+                    dtype=np.int32,
                 )
                 group.create_array(
                     "atom_charges",
@@ -93,7 +102,10 @@ class PlinderZarrConverter:
                     dtype=np.float32,
                 )
                 group.create_array(
-                    "bond_types", shape=(0,), chunks=(self.lig_chunk_size,), dtype=np.int32
+                    "bond_types",
+                    shape=(0,),
+                    chunks=(self.lig_chunk_size,),
+                    dtype=np.int32,
                 )
                 group.create_array(
                     "bond_indices",
@@ -112,30 +124,41 @@ class PlinderZarrConverter:
             self.root.attrs["chunk_sizes"] = []
             self.root.attrs["system_type_idxs"] = []
 
-            self.receptor_lookup = self.root.attrs["receptor_lookup"] # [{system_id, receptor_idx, start, end, ligand_idxs, npnde_idxs, pocket_idxs, apo_idxs, pred_idxs, cif}]
-            self.apo_lookup = self.root.attrs["apo_lookup"] # [{system_id, apo_id, receptor_idx, apo_idx, start, end, cif}]
-            self.pred_lookup = self.root.attrs["pred_lookup"] # [{system_id, pred_id, receptor_idx, pred_idx, start, end, cif}]
-            self.ligand_lookup = self.root.attrs["ligand_lookup"] # [{system_id, ligand_id, receptor_idx, ligand_idx, ligand_num, atom_start, atom_end, bond_start, bond_end, sdf}]
-            self.pocket_lookup = self.root.attrs["pocket_lookup"] # [{system_id, pocket_id, receptor_idx, pocket_idx, pocket_num, start, end}]
-            self.npnde_lookup = self.root.attrs["npnde_lookup"] # [{system_id, npnde_id, receptor_idx, npnde_idx, atom_start, atom_end, bond_start, bond_end, sdf}]
-        
+            self.receptor_lookup = self.root.attrs[
+                "receptor_lookup"
+            ]  # [{system_id, receptor_idx, start, end, ligand_idxs, npnde_idxs, pocket_idxs, apo_idxs, pred_idxs, cif}]
+            self.apo_lookup = self.root.attrs[
+                "apo_lookup"
+            ]  # [{system_id, apo_id, receptor_idx, apo_idx, start, end, cif}]
+            self.pred_lookup = self.root.attrs[
+                "pred_lookup"
+            ]  # [{system_id, pred_id, receptor_idx, pred_idx, start, end, cif}]
+            self.ligand_lookup = self.root.attrs[
+                "ligand_lookup"
+            ]  # [{system_id, ligand_id, receptor_idx, ligand_idx, ligand_num, atom_start, atom_end, bond_start, bond_end, sdf}]
+            self.pocket_lookup = self.root.attrs[
+                "pocket_lookup"
+            ]  # [{system_id, pocket_id, receptor_idx, pocket_idx, pocket_num, start, end}]
+            self.npnde_lookup = self.root.attrs[
+                "npnde_lookup"
+            ]  # [{system_id, npnde_id, receptor_idx, npnde_idx, atom_start, atom_end, bond_start, bond_end, sdf}]
+
         else:
-            self.root = zarr.open_group(store=str(self.output_path), mode='r+')
-            
-            self.receptor = self.root['receptor']
-            self.apo = self.root['apo']
-            self.pred = self.root['pred']
-            self.pocket = self.root['pocket']
-            self.ligand = self.root['ligand']
-            self.npnde = self.root['npnde']
-            
+            self.root = zarr.open_group(store=str(self.output_path), mode="r+")
+
+            self.receptor = self.root["receptor"]
+            self.apo = self.root["apo"]
+            self.pred = self.root["pred"]
+            self.pocket = self.root["pocket"]
+            self.ligand = self.root["ligand"]
+            self.npnde = self.root["npnde"]
+
             self.receptor_lookup = self.root.attrs["receptor_lookup"]
             self.apo_lookup = self.root.attrs["apo_lookup"]
             self.pred_lookup = self.root.attrs["pred_lookup"]
             self.ligand_lookup = self.root.attrs["ligand_lookup"]
             self.pocket_lookup = self.root.attrs["pocket_lookup"]
             self.npnde_lookup = self.root.attrs["npnde_lookup"]
-
 
     def _append_structure_data(
         self, group: zarr.Group, data: StructureData
@@ -361,6 +384,7 @@ class PlinderZarrConverter:
 
     def process_dataset(self, system_ids: List[str]):
         """Process list of systems"""
+        start = len(self.receptor_lookup)
         with mp.Manager() as manager:
             lock = manager.Lock()
             result_queue = manager.Queue()
@@ -397,6 +421,11 @@ class PlinderZarrConverter:
 
             result_queue.put(None)
             writer_thread.join()
+
+            end = len(self.receptor_lookup)
+            if self.category:
+                self.root.attrs["system_type_idxs"].append((category, start, end))
+
 
 def load_lookups(
     zarr_path: str = None, root: zarr.Group = None
