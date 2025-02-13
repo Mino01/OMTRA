@@ -44,9 +44,16 @@ class PlinderZarrConverter:
             self.receptor = self.root.create_group("receptor")
             self.apo = self.root.create_group("apo")
             self.pred = self.root.create_group("pred")
+            self.link_receptor = self.root.create_group("link_receptor")
             self.pocket = self.root.create_group("pocket")
 
-            for group in [self.receptor, self.apo, self.pred, self.pocket]:
+            for group in [
+                self.receptor,
+                self.apo,
+                self.pred,
+                self.pocket,
+                self.link_receptor,
+            ]:
                 chunk = self.struc_chunk_size
                 if group == self.pocket:
                     chunk = self.lig_chunk_size
@@ -123,16 +130,17 @@ class PlinderZarrConverter:
             self.root.attrs["npnde_lookup"] = []
             self.root.attrs["chunk_sizes"] = []
             self.root.attrs["system_type_idxs"] = []
+            self.root.attrs["link_receptor_lookup"] = []
 
             self.receptor_lookup = self.root.attrs[
                 "receptor_lookup"
             ]  # [{system_id, receptor_idx, start, end, ligand_idxs, npnde_idxs, pocket_idxs, apo_idxs, pred_idxs, cif}]
             self.apo_lookup = self.root.attrs[
                 "apo_lookup"
-            ]  # [{system_id, apo_id, receptor_idx, apo_idx, start, end, cif}]
+            ]  # [{system_id, apo_id, receptor_idx, link_receptor_idx, apo_idx, start, end, link_start, link_end, cif}]
             self.pred_lookup = self.root.attrs[
                 "pred_lookup"
-            ]  # [{system_id, pred_id, receptor_idx, pred_idx, start, end, cif}]
+            ]  # [{system_id, pred_id, receptor_idx, link_receptor_idx, pred_idx, start, end, link_start, link_end, cif}]
             self.ligand_lookup = self.root.attrs[
                 "ligand_lookup"
             ]  # [{system_id, ligand_id, receptor_idx, ligand_idx, ligand_num, atom_start, atom_end, bond_start, bond_end, sdf}]
@@ -142,6 +150,7 @@ class PlinderZarrConverter:
             self.npnde_lookup = self.root.attrs[
                 "npnde_lookup"
             ]  # [{system_id, npnde_id, receptor_idx, npnde_idx, atom_start, atom_end, bond_start, bond_end, sdf}]
+            self.link_receptor_lookup = self.root.attrs["link_receptor_lookup"]
 
         else:
             self.root = zarr.open_group(store=str(self.output_path), mode="r+")
@@ -152,6 +161,7 @@ class PlinderZarrConverter:
             self.pocket = self.root["pocket"]
             self.ligand = self.root["ligand"]
             self.npnde = self.root["npnde"]
+            self.link_receptor = self.root["link_receptor"]
 
             self.receptor_lookup = self.root.attrs["receptor_lookup"]
             self.apo_lookup = self.root.attrs["apo_lookup"]
@@ -159,6 +169,7 @@ class PlinderZarrConverter:
             self.ligand_lookup = self.root.attrs["ligand_lookup"]
             self.pocket_lookup = self.root.attrs["pocket_lookup"]
             self.npnde_lookup = self.root.attrs["npnde_lookup"]
+            self.link_receptor_lookup = self.root.attrs["link_receptor_lookup"]
 
     def _append_structure_data(
         self, group: zarr.Group, data: StructureData
@@ -264,6 +275,7 @@ class PlinderZarrConverter:
             "npnde_idxs": None,
             "apo_idxs": None,
             "pred_idxs": None,
+            "link_receptor_idxs": None,
             "cif": system_data["receptor"].cif,
         }
 
@@ -344,42 +356,98 @@ class PlinderZarrConverter:
         # Process apo structures
         if system_data["apo_structures"]:
             apo_idxs = []
+            link_receptor_idxs = []
             for apo_id, apo_data in system_data["apo_structures"].items():
                 apo_idx = len(self.apo_lookup)
+                link_receptor_idx = len(self.link_receptor_lookup)
+
                 apo_idxs.append(apo_idx)
-                apo_start, apo_end = self._append_structure_data(self.apo, apo_data)
+
+                apo_start, apo_end = self._append_structure_data(
+                    self.apo, apo_data[apo_id]
+                )
+                link_rec_start, link_rec_end = self._append_structure_data(
+                    self.link_receptor, apo_data["holo"]
+                )
                 self.apo_lookup.append(
                     {
                         "system_id": system_data["system_id"],
                         "apo_id": apo_id,
                         "receptor_idx": receptor_idx,
+                        "link_receptor_idx": link_receptor_idx,
                         "apo_idx": apo_idx,
                         "start": apo_start,
                         "end": apo_end,
-                        "cif": apo_data.cif,
+                        "link_start": link_rec_start,
+                        "link_end": link_rec_end,
+                        "cif": apo_data[apo_id].cif,
                     }
                 )
+                self.link_receptor_lookup.append(
+                    {
+                        "system_id": system_data["system_id"],
+                        "link_id": apo_id,
+                        "receptor_idx": receptor_idx,
+                        "link_receptor_idx": link_receptor_idx,
+                        "apo_idx": apo_idx,
+                        "pred_idx": None,
+                        "link_start": link_rec_start,
+                        "link_end": link_rec_end,
+                        "cif": apo_data["holo"].cif,
+                    }
+                )
+
             receptor_entry["apo_idxs"] = apo_idxs
+            receptor_entry["link_receptor_idxs"] = link_receptor_idxs
 
         # Process pred structures
         if system_data["pred_structures"]:
             pred_idxs = []
+            pred_link_receptor_idxs = []
             for pred_id, pred_data in system_data["pred_structures"].items():
                 pred_idx = len(self.pred_lookup)
+                link_receptor_idx = len(self.link_receptor_lookup)
+
                 pred_idxs.append(pred_idx)
-                pred_start, pred_end = self._append_structure_data(self.pred, pred_data)
+                pred_start, pred_end = self._append_structure_data(
+                    self.pred, pred_data[pred_id]
+                )
+                link_rec_start, link_rec_end = self._append_structure_data(
+                    self.link_receptor, pred_data["holo"]
+                )
                 self.pred_lookup.append(
                     {
                         "system_id": system_data["system_id"],
                         "pred_id": pred_id,
                         "receptor_idx": receptor_idx,
+                        "link_receptor_idx": link_receptor_idx,
                         "pred_idx": pred_idx,
                         "start": pred_start,
                         "end": pred_end,
-                        "cif": pred_data.cif,
+                        "link_start": link_rec_start,
+                        "link_end": link_rec_end,
+                        "cif": pred_data[pred_id].cif,
                     }
                 )
+                self.link_receptor_lookup.append(
+                    {
+                        "system_id": system_data["system_id"],
+                        "link_id": pred_id,
+                        "receptor_idx": receptor_idx,
+                        "link_receptor_idx": link_receptor_idx,
+                        "apo_idx": None,
+                        "pred_idx": pred_idx,
+                        "link_start": link_rec_start,
+                        "link_end": link_rec_end,
+                        "cif": pred_data["holo"].cif,
+                    }
+                )
+
             receptor_entry["pred_idxs"] = pred_idxs
+            if receptor_entry["link_receptor_idxs"]:
+                receptor_entry["link_receptor_idxs"] += pred_link_receptor_idxs
+            else:
+                receptor_entry["link_receptor_idxs"] = pred_link_receptor_idxs
         self.receptor_lookup.append(receptor_entry)
 
     def process_dataset(self, system_ids: List[str]):
@@ -552,7 +620,7 @@ def get_pocket(
 
 def get_apo(
     apo_idx: int, zarr_path: str = None, root: zarr.Group = None
-) -> StructureData:
+) -> (str, Dict[str, StructureData]):
     """Helper function to load apo structure from zarr store"""
     if not root:
         store = zarr.storage.LocalStore(zarr_path)
@@ -561,7 +629,13 @@ def get_apo(
     apo_df = pd.DataFrame(root.attrs["apo_lookup"])
     apo_info = apo_df[apo_df["apo_idx"] == apo_idx].iloc[0]
 
+    receptor_df = pd.DataFrame(root.attrs["receptor_lookup"])
+    receptor_info = receptor_df[
+        receptor_df["receptor_idx"] == apo_info["receptor_idx"]
+    ].iloc[0]
+
     start, end = apo_info["start"], apo_info["end"]
+    link_start, link_end = apo_info["link_start"], apo_info["link_end"]
 
     apo = StructureData(
         coords=root["apo"]["coords"][start:end],
@@ -571,8 +645,16 @@ def get_apo(
         chain_ids=root["apo"]["chain_ids"][start:end].astype(str),
         cif=apo_info["cif"],
     )
+    holo = StructureData(
+        coords=root["link_receptor"]["coords"][link_start:link_end],
+        atom_names=root["link_receptor"]["atom_names"][link_start:link_end].astype(str),
+        res_ids=root["link_receptor"]["res_ids"][link_start:link_end],
+        res_names=root["link_receptor"]["res_names"][link_start:link_end].astype(str),
+        chain_ids=root["link_receptor"]["chain_ids"][link_start:link_end].astype(str),
+        cif=receptor_info["cif"],
+    )
 
-    return apo_info["apo_id"], apo
+    return apo_info["apo_id"], {apo_info["apo_id"]: apo, "holo": holo}
 
 
 def get_pred(
@@ -586,7 +668,13 @@ def get_pred(
     pred_df = pd.DataFrame(root.attrs["pred_lookup"])
     pred_info = pred_df[pred_df["pred_idx"] == pred_idx].iloc[0]
 
+    receptor_df = pd.DataFrame(root.attrs["receptor_lookup"])
+    receptor_info = receptor_df[
+        receptor_df["receptor_idx"] == pred_info["receptor_idx"]
+    ].iloc[0]
+
     start, end = pred_info["start"], pred_info["end"]
+    link_start, link_end = pred_info["link_start"], pred_info["link_end"]
 
     pred = StructureData(
         coords=root["pred"]["coords"][start:end],
@@ -596,8 +684,16 @@ def get_pred(
         chain_ids=root["pred"]["chain_ids"][start:end].astype(str),
         cif=pred_info["cif"],
     )
+    holo = StructureData(
+        coords=root["link_receptor"]["coords"][link_start:link_end],
+        atom_names=root["link_receptor"]["atom_names"][link_start:link_end].astype(str),
+        res_ids=root["link_receptor"]["res_ids"][link_start:link_end],
+        res_names=root["link_receptor"]["res_names"][link_start:link_end].astype(str),
+        chain_ids=root["link_receptor"]["chain_ids"][link_start:link_end].astype(str),
+        cif=receptor_info["cif"],
+    )
 
-    return pred_info["pred_id"], pred
+    return pred_info["pred_id"], {pred_info["pred_id"]: pred, "holo": holo}
 
 
 def get_system(zarr_path: str, receptor_idx: int) -> Dict:

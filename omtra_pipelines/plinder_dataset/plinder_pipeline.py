@@ -182,7 +182,7 @@ class StructureProcessor:
             system.chain_mapping,
         )
 
-        return {"holo": holo_data, "link": linked_data}
+        return {"holo": holo_data, linked_id: linked_data}
 
     def process_ligands(
         self, system: PlinderSystem, ligand_mols: Dict[str, Chem.Mol]
@@ -458,9 +458,9 @@ class SystemProcessor:
                 logger.info(
                     "Processing apo structure %s linked to system %s", id, system_id
                 )
-                apo_structures[id] = self.structure_processor.process_linked_structure(
-                    system, id
-                )
+                apo = self.structure_processor.process_linked_structure(system, id)
+                if apo:
+                    apo_structures[id] = apo
 
         # Process pred structures
         pred_structures = {}
@@ -469,9 +469,9 @@ class SystemProcessor:
                 logger.info(
                     "Processing pred structure %s linked to system %s", id, system_id
                 )
-                pred_structures[id] = self.structure_processor.process_linked_structure(
-                    system, id
-                )
+                pred = self.structure_processor.process_linked_structure(system, id)
+                if pred:
+                    pred_structures[id] = pred
 
         return {
             "receptor": receptor_data,
