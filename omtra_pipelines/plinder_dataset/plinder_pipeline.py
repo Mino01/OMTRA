@@ -185,7 +185,7 @@ class StructureProcessor:
         return {"holo": holo_data, linked_id: linked_data}
 
     def process_ligands(
-        self, system: PlinderSystem, ligand_mols: Dict[str, Chem.Mol]
+        self, system: PlinderSystem, ligand_mols: Dict[str, Chem.rdchem.Mol]
     ) -> Dict[str, LigandData]:
         keys = list(ligand_mols.keys())
         mols = list(ligand_mols.values())
@@ -215,7 +215,7 @@ class StructureProcessor:
         return ligands_data
 
     def process_npndes(
-        self, system: PlinderSystem, npnde_mols: Dict[str, Chem.Mol]
+        self, system: PlinderSystem, npnde_mols: Dict[str, Chem.rdchem.Mol]
     ) -> Dict[str, LigandData]:
         keys = list(npnde_mols.keys())
         mols = list(npnde_mols.values())
@@ -303,7 +303,7 @@ class SystemProcessor:
 
     def filter_ligands(
         self, system: PlinderSystem
-    ) -> (Dict[str, Chem.Mol], Dict[str, Chem.Mol]):
+    ) -> (Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]):
         system_annotation = system.system
         system_structure = system.holo_structure
 
@@ -394,8 +394,8 @@ class SystemProcessor:
         self,
         system_id: str,
         system: PlinderSystem,
-        ligand_mols: Dict[str, Chem.Mol],
-        npnde_mols: Optional[Dict[str, Chem.Mol]] = None,
+        ligand_mols: Dict[str, Chem.rdchem.Mol],
+        npnde_mols: Optional[Dict[str, Chem.rdchem.Mol]] = None,
         apo_ids: Optional[List[str]] = None,
         pred_ids: Optional[List[str]] = None,
         chain_mapping: Optional[Dict[str, str]] = None,
