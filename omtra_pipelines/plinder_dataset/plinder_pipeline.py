@@ -305,7 +305,9 @@ class StructureProcessor:
             atom_types=np.array(new_atom_types, dtype=np.int32),
             atom_charges=ligand.atom_charges,
             bond_types=ligand.bond_types,
-            bond_indices=ligand.bond_indices
+            bond_indices=ligand.bond_indices,
+            is_covalent=ligand.is_covalent,
+            linkages=ligand.linkages
         )
         return npnde
 
