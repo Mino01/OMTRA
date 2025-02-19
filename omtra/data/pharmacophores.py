@@ -35,12 +35,12 @@ matching_types = {
 }
 
 matching_distance = {
-    "Aromatic": 7,
-    "Hydrophobic": 5,
-    "HydrogenAcceptor": 4,
-    "HydrogenDonor": 4,
-    "NegativeIon": 5,
-    "PositiveIon": 5
+    "Aromatic": [7, 5],
+    "HydrogenDonor": [4],
+    "HydrogenAcceptor": [4],
+    "PositiveIon": [5, 7],
+    "NegativeIon": [5],
+    "Hydrophobic": [5]
 }
 
 def get_smarts_matches(rdmol, smarts_pattern):
@@ -74,22 +74,26 @@ def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
 
 def check_interaction(all_ligand_positions, receptor, feature):
     """
-    Check if the ligand features interact with matching receptor feature
+    Check if the ligand features interact with their matching receptor features
     """
     paired_features = matching_types[feature]
-    
-    all_receptor_positions = []
-    for paired_feature in paired_features:
-        for rec_pattern in smarts_patterns[paired_feature]:
+    feature_cutoff = matching_distance[feature]
+    interaction = [False] * len(all_ligand_positions)
+
+    for feature, cutoff in zip(paired_features, feature_cutoff):
+        all_receptor_positions = []
+        for rec_pattern in smarts_patterns[feature]:
             _, _, rec_feature_positions = get_smarts_matches(receptor, rec_pattern)
             all_receptor_positions.extend(rec_feature_positions)
 
-    feature_cutoff = matching_distance[feature]
-    interaction = []
-    for pos in all_ligand_positions:
-        distances = cdist(pos, all_receptor_positions)
-        mask = distances <= feature_cutoff
-        interaction.append(np.any(mask))
+        if not all_receptor_positions:
+            continue
+        
+        all_receptor_positions = np.array(all_receptor_positions)
+        distances = cdist(all_ligand_positions, all_receptor_positions)
+        for i, dist in enumerate(distances):
+            if np.any(dist <= cutoff):
+                interaction[i] = True
 
     return interaction
 
@@ -128,10 +132,3 @@ def get_pharmacophore_dict(ligand, receptor=None):
                 pharmacophores[feature]['I'].extend(interaction)
                 
     return pharmacophores
-
-'''
-supplier = Chem.SDMolSupplier('test.sdf')
-mol = supplier[0]
-dict = get_pharmacophore_dict(mol)
-pprint.pprint(dict)
-'''
