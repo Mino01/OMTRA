@@ -35,9 +35,14 @@ def parse_args():
     p.add_argument('--db_dir', type=Path, default='./pharmit_small/')
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
+    p.add_argument('--chunk_info_dir', type=Path, 
+                   help='Output directory for information on data chunk files.', 
+                   default='outputs/phase1_chunk_info')
+    p.add_argument('--chunk_data_dir', type=Path, 
+                   help='Output directory for tensor chunks.', 
+                   default='outputs/phase1_chunk_data')
+
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
-    p.add_argument('--chunk_info_dir', type=str, help='Output directory for information on data chunk files.')
-    p.add_argument('--chunk_data_dir', type=str, help='Output directory for tensor chunks.')
     p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
     p.add_argument('--pharm_types', type=list, default=['Aromatic','HydrogenDonor','HydrogenAcceptor','Hydrophobic','NegativeIon','PositiveIon'], help='Pharmacophore center types.')
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
