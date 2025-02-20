@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
+# TODO: update for repeated storage of system per focal ligand
 
 class PlinderZarrConverter:
     def __init__(
