@@ -8,10 +8,11 @@ import re
 
 from rdkit.Chem import AllChem as Chem
 import numpy as np
-from collections import defaultdict
-import zarr
-import time
 import os
+from multiprocessing import Pool
+import pickle
+from functools import partial
+
 
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
@@ -281,10 +282,7 @@ def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
     
 
 
-def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
-
-    # TODO: this should not be hard coded!!!!
-    ph_type_to_idx = {type:idx for idx, type in enumerate(args.pharm_types)}
+def get_pharmacophore_data(conformer_files, ph_type_idx, tmp_path: Path = None):
 
     # create a temporary directory if one is not provided
     delete_tmp_dir = False
@@ -293,12 +291,14 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
         tmp_dir = TemporaryDirectory()
         tmp_path = Path(tmp_dir.name)
 
+
     # collect all pharmacophore data
     all_x_pharm = []
     all_a_pharm = []
     failed_pharm_idxs = []
+
     for idx, conf_file in enumerate(conformer_files):
-        x_pharm, a_pharm = get_lig_only_pharmacophore(conf_file, tmp_path, ph_type_to_idx)
+        x_pharm, a_pharm = get_lig_only_pharmacophore(conf_file, tmp_path, ph_type_idx)
         if x_pharm is None:
             failed_pharm_idxs.append(idx)
             continue
@@ -311,7 +311,8 @@ def get_pharmacophore_data(conformer_files, tmp_path: Path = None):
 
     return all_x_pharm, all_a_pharm, failed_pharm_idxs
     
-def generate_library_tensor(names):
+
+def generate_library_tensor(names, database_list):
     """
     Generates a binary tensor indicating whether each molecule belongs to any of the specified libraries.
 
@@ -322,19 +323,29 @@ def generate_library_tensor(names):
         np.ndarray: A binary tensor of shape (num_mols, num_libraries) where each element is 1 if the molecule belongs to the library, otherwise 0.
     """
     num_mols = len(names)
-    num_libraries = len(args.databases)
+    num_libraries = len(database_list)
     
     # Initialize the binary tensor with zeros
     library_tensor = np.zeros((num_mols, num_libraries), dtype=int)
     
     for i, molecule_names in enumerate(names):
-        for j, db in enumerate(args.databases):
+        for j, db in enumerate(database_list):
             if db in molecule_names:
                 library_tensor[i, j] = 1
     
     return library_tensor
     
-def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases):
+
+def save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file):
+    
+    positions = tensors['positions']
+    atom_types = tensors['atom_types']
+    atom_charges = tensors['atom_charges']
+    bond_types = tensors['bond_types']
+    bond_idxs = tensors['bond_idxs']
+    x_pharm = tensors['x_pharm']
+    a_pharm = tensors['a_pharm']
+    databases = tensors['databases']
 
     # Record the number of nodes and edges in each molecule and convert to numpy arrays
     batch_num_nodes = np.array([x.shape[0] for x in positions])
@@ -359,8 +370,9 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
 
     # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
     pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
-    # Create data dictionary
-    chunk_data_dict ={ 
+
+    # Tensor dictionary
+    chunk_data_dict = { 
         'lig_x': x,
         'lig_a': a,
         'lig_c': c,
@@ -374,97 +386,125 @@ def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_ty
         'database': databases
     }
 
-    # Save dictionary to npz file
-    with open(output_file, 'wb') as f:
-        np.savez(f, chunk_data_dict)
 
-    return len(x), len(e), len(x_pharm)
+    # Save tensor dictionary to npz file
+    with open(chunk_data_file, 'wb') as f:
+        np.savez(f, **chunk_data_dict)
+    
 
+    
+    # Chunk data file info dictionary
+    chunk_info_dict = {
+        'File': chunk_data_file,
+        'Mols': len(node_lookup),
+        'Atoms': len(x),
+        'Edges': len(e),
+        'Pharm': len(x_pharm)
+    }
+
+    
+    # Dump info dictionary in pickle files
+    with open(chunk_info_file, "wb") as f:
+        pickle.dump(chunk_info_dict, f)
+
+
+def process_batch(conformer_files, atom_type_map, spoof_db, ph_type_idx, database_list):
+    mol_tensorizer = MoleculeTensorizer(atom_map=atom_type_map)
+    name_finder = NameFinder(spoof_db=spoof_db)
+
+    # Get RDKit Mol objects
+    mols = [read_mol_from_conf_file(file) for file in conformer_files]
+    # Find molecules that failed to featurize and count them
+    failed_mol_idxs = []
+    for i in range(len(mols)):
+        if mols[i] is None:
+            failed_mol_idxs.append(i)
+
+    if len(failed_mol_idxs) > 0:
+        #print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
+
+    # (BATCHED) SMILES representations
+    smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files)
+    # Remove molecules that couldn't get SMILES data
+    if len(failed_smiles_idxs) > 0:
+       #print("SMILEs for", len(failed_smiles_idxs), "conformer files could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_smiles_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_smiles_idxs]
+
+
+    # (BATCHED) Database source
+    names, failed_names_idxs = name_finder.query_name_batch(smiles)
+    # Remove molecules that couldn't get database data
+    if len(failed_names_idxs) > 0:
+        #print("Database sources for", len(failed_names_idxs), "could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
+
+
+    # Get pharmacophore data
+    x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files, ph_type_idx)
+    # Remove ligands where pharmacophore generation failed
+    if len(failed_pharm_idxs) > 0 :
+        #print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
+        names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
+        
+    
+    # Get XACE data
+    positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
+    # Remove molecules that failed to get xace data
+    if len(failed_xace_idxs) > 0:
+        #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
+        names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
+        x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
+        a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
+    
+    
+    # Tensorize database sources
+    databases  = generate_library_tensor(names, database_list)
+
+    # Save tensors in dictionary
+    tensors = {'positions': positions, 'atom_types': atom_types, 'atom_charges': atom_charges, 'bond_types': bond_types, 'bond_idxs': bond_idxs, 'x_pharm': x_pharm, 'a_pharm': a_pharm, 'databases': databases}
+    return tensors
+
+    
 
 
 if __name__ == '__main__':
-    args = parse_args()
-    mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
-    name_finder = NameFinder(spoof_db=args.spoof_db)
 
+    args = parse_args()
+    database_list = args.databases
+    atom_type_map = args.atom_type_map
+    spoof_db = args.spoof_db
+    ph_type_idx = {type:idx for idx, type in enumerate(args.pharm_types)}
+
+    # Make output directories
     os.makedirs(args.chunk_data_dir, exist_ok=True)
     os.makedirs(args.chunk_info_dir, exist_ok=True)
 
-    batch_size = args.batch_size # Batch size for queries and processing to disk (memory clearing)
-    chunks = 0
+    path_iter = crawl_conformer_files(args.db_dir)
+    batch_iter = batch_generator(path_iter, args.batch_size)
 
-    for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
-        chunks += 1
+    chunk = 0
 
-        # Get RDKit Mol objects
-        mols = [read_mol_from_conf_file(file) for file in conformer_files]
-        # Find molecules that failed to featurize and count them
-        failed_mol_idxs = []
-        for i in range(len(mols)):
-            if mols[i] is None:
-                failed_mol_idxs.append(i)
+    with Pool() as pool:
+        for conformer_files in batch_iter:
+            chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk}.npz"
+            chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk}.pkl"
 
-        if len(failed_mol_idxs) > 0:
-            print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
-
-        # (BATCHED) SMILES representations
-        smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files)
-        # Remove molecules that couldn't get SMILES data
-        if len(failed_smiles_idxs) > 0:
-            print("SMILEs for", len(failed_smiles_idxs), "conformer files could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_smiles_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_smiles_idxs]
-
-
-        # (BATCHED) Database source
-        names, failed_names_idxs = name_finder.query_name_batch(smiles)
-        # Remove molecules that couldn't get database data
-        if len(failed_names_idxs) > 0:
-            print("Database sources for", len(failed_names_idxs), "could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
-
-
-        # Get pharmacophore data
-        x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files)
-        # Remove ligands where pharmacophore generation failed
-        if len(failed_pharm_idxs) > 0 :
-            print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
-            names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
-            
+            pool.apply_async(process_batch, args=(conformer_files, atom_type_map, spoof_db, ph_type_idx, database_list), callback=partial(save_chunk_to_disk, chunk_data_file=chunk_data_file, chunk_info_file=chunk_info_file))
+            print(f"Processed batch {chunk+1}")
+            chunk += 1
         
-        # Get XACE data
-        positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
-        # Remove molecules that failed to get xace data
-        if len(failed_xace_idxs) > 0:
-            print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
-            names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
-            x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
-            a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
-        
-       
-        # Tensorize database sources
-        databases  = generate_library_tensor(names)
-
-        # Format and save tensors to disk
-        output_chunk_file = f"{args.chunk_data_dir}/data_chunk_{chunks}.npz"
-        num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, databases)
-        
-        # Record number of molecules in data chunk file to txt file
-        output_info_file = f"{args.chunk_info_dir}/data_chunk_{chunks}.txt"
-        with open(output_info_file, "w") as f:
-            f.write("File, Mols, Atoms, Edges, Pharm \n")
-            line = f"{output_chunk_file}, {len(mols)}, {num_atoms}, {num_edges}, {num_pharm} \n"
-            f.write(line)
-        
-        print(f"Processed batch {chunks}")
-        print("––––––––––––––––––––––––––––––––––––––––––––––––")
+        pool.close()
+        pool.join()
 
     
+    
+
 
     # TODO: convert pharmacophore and names into tensors
     # TODO: can you combine the conformer_file -> smiles -> names into one query rather than two? one query that is batched?
