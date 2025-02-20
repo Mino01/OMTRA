@@ -55,37 +55,6 @@ def parse_args():
     args = p.parse_args()
     return args
 
-
-"""
-def extract_pharmacophore_data(mol):
-    
-    Parses pharmacophore data from an RDKit molecule object into a dictionary.
-
-    Args:
-        mol (rdkit.Chem.rdchem.Mol): RDKit molecule object containing pharmacophore data.
-
-    Returns:
-        dict: Parsed pharmacophore data with types as keys and lists of tuples as values.
-    
-    pharmacophore_data = mol.GetProp("pharmacophore") if mol.HasProp("pharmacophore") else None
-    if pharmacophore_data is None:
-        return None
-
-    parsed_data = []
-    lines = pharmacophore_data.splitlines()
-    for line in lines:
-        parts = line.split()
-        if len(parts) >= 4:
-            ph_type = parts[0]  # Pharmacophore type
-            try:
-                coordinates = tuple(map(float, parts[1:4]))  # Extract the 3 float values
-                parsed_data.append((ph_type, coordinates))
-            except ValueError:
-                print(f"Skipping line due to parsing error: {line}")
-
-    return parsed_data
-"""
-
 class NameFinder():
 
     def __init__(self, spoof_db=False):
@@ -99,7 +68,6 @@ class NameFinder():
                 db="conformers",)
                 # password="",
                 # unix_socket="/var/run/mysqld/mysqld.sock")
-            self.cursor = self.conn.cursor()
 
     def query_name(self, smiles: str):
 
@@ -178,7 +146,7 @@ class NameFinder():
         # failure will be different than a mysqlerror; there just wont be an entry if the file is not in the database
         with self.conn.cursor() as cursor:
             query = "SELECT sdfloc, smile FROM structures WHERE sdfloc IN %s"
-            cursor.execute(query, (tuple(str(file) for file in conformer_files),))
+            cursor.execute(query, [tuple(str(file) for file in conformer_files)])
             results = cursor.fetchall()
 
         for sdfloc, smile in results:
@@ -192,6 +160,46 @@ class NameFinder():
         smiles = [smile for smile in file_to_smile.values() if smile is not None] # Remove None entries 
 
         return smiles, failed_idxs
+    
+
+    def query_names_from_files_batch(self, filepaths: list[Path]):
+        """
+        Given a list of filepaths, return the names linked to each of those filepaths
+        with a single query to the database.
+
+        Args:
+            filepaths (list of Path): A list of filepaths to query.
+
+        Returns:
+            list of list of str: A list of lists, where each sublist contains the names
+                                 associated with the corresponding filepath.
+            list of int: A list of indices for filepaths that failed to retrieve names.
+        """
+        if self.conn is None:
+            return [['PubChem', 'ZINC', 'MolPort'] for _ in filepaths], []
+
+        file_to_names = {Path(file): None for file in filepaths}  # Dictionary to map file to names
+
+        with self.conn.cursor() as cursor:
+            # Use the IN clause to query multiple filepaths
+            query = """
+                SELECT s.sdfloc, n.name 
+                FROM structures s 
+                JOIN names n ON s.smile = n.smile 
+                WHERE s.sdfloc IN %s
+            """
+            cursor.execute(query, (tuple(str(file) for file in filepaths),))
+            results = cursor.fetchall()
+
+        for sdfloc, name in results:
+            if file_to_names[Path(sdfloc)] is None:
+                file_to_names[Path(sdfloc)] = []
+            file_to_names[Path(sdfloc)].append(name)
+
+        failed_idxs = [i for i, file in enumerate(filepaths) if file_to_names[Path(file)] is None]  # Get the indices of failed filepaths
+        names = [names for file, names in file_to_names.items() if names is not None]  # Remove None entries
+
+        return names, failed_idxs
     
 
 def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
@@ -211,13 +219,16 @@ def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first 
 
 def crawl_conformer_files(db_dir: Path):
     for data_dir in db_dir.iterdir():
+        is_data_dir = data_dir.is_dir() and re.match(r'data\d{2}', data_dir.name)
+        if not is_data_dir:
+            continue
         conformers_dir = data_dir / 'conformers'
         for conformer_subdir in conformers_dir.iterdir():
             for conformer_file in conformer_subdir.iterdir():
                 yield conformer_file
 
 
-def batch_generator(iterable, batch_size):
+def batch_generator(iterable, batch_size, n_chunks):
     """  
     Gets batches of conformer files
 
@@ -229,11 +240,15 @@ def batch_generator(iterable, batch_size):
         batch: List of conformer file paths of length batch_size (or remaining files)
     """
     batch = []
+    batches_served = 0
     for item in iterable:
         batch.append(item)
         if len(batch) == batch_size:
             yield batch
+            batches_served += 1
             batch = []  # Reset the batch
+            if n_chunks is not None and batches_served >= n_chunks:
+                break
 
     if batch:  # Remaining items that didn't fill a complete batch
         yield batch
@@ -483,11 +498,8 @@ def process_batch(conformer_files, atom_type_map, ph_type_idx, database_list):
     return tensors
 
 def run_parallel(args, batch_iter):
-    with Pool(processes=args.n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
+    with Pool(processes=args.n_cpus, initializer=worker_initializer, initargs=(args.spoof_db,)) as pool:
         for chunk_idx, conformer_files in enumerate(batch_iter):
-
-            if args.n_chunks is not None and chunk_idx > args.n_chunks:
-                break
 
             chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
             chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
@@ -506,9 +518,6 @@ def run_parallel(args, batch_iter):
 def run_single(args, batch_iter):
     worker_initializer(args.spoof_db)
     for chunk_idx, conformer_files in enumerate(batch_iter):
-
-        if args.n_chunks is not None and chunk_idx > args.n_chunks:
-            break
 
         chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
         chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
@@ -530,7 +539,7 @@ if __name__ == '__main__':
     os.makedirs(args.chunk_info_dir, exist_ok=True)
 
     path_iter = crawl_conformer_files(args.db_dir)
-    batch_iter = batch_generator(path_iter, args.batch_size)
+    batch_iter = batch_generator(path_iter, args.batch_size, args.n_chunks)
 
     start_time = time.time()
 
