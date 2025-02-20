@@ -19,11 +19,12 @@ from omtra.utils.graph import build_lookup_table
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from tempfile import TemporaryDirectory
 
-# TODO: this script should actually take as input just a hydra config 
-# - but Ramith is setting up our hydra stuff yet, and we don't 
-# yet know what the config for this dataset processing component will look like
-# so for now just argparse, and once its written it'll be easy/concrete to 
-# port into a hydra config
+# Global variable to hold the NameFinder object
+name_finder = None
+
+def worker_initializer(spoof_db):
+    global name_finder
+    name_finder = NameFinder(spoof_db=spoof_db)
  
 def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
@@ -41,6 +42,8 @@ def parse_args():
     p.add_argument('--pharm_types', type=list, default=['Aromatic','HydrogenDonor','HydrogenAcceptor','Hydrophobic','NegativeIon','PositiveIon'], help='Pharmacophore center types.')
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
+
+    p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
 
     args = p.parse_args()
     return args
@@ -407,10 +410,12 @@ def save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file):
     with open(chunk_info_file, "wb") as f:
         pickle.dump(chunk_info_dict, f)
 
+    print('Wrote chunk:', chunk_info_dict['File'])
 
-def process_batch(conformer_files, atom_type_map, spoof_db, ph_type_idx, database_list):
+
+def process_batch(conformer_files, atom_type_map, ph_type_idx, database_list):
+    global name_finder
     mol_tensorizer = MoleculeTensorizer(atom_map=atom_type_map)
-    name_finder = NameFinder(spoof_db=spoof_db)
 
     # Get RDKit Mol objects
     mols = [read_mol_from_conf_file(file) for file in conformer_files]
@@ -490,21 +495,21 @@ if __name__ == '__main__':
 
     chunk = 0
 
-    with Pool() as pool:
+    with Pool(processes=args.n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
         for conformer_files in batch_iter:
             chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk}.npz"
             chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk}.pkl"
 
-            pool.apply_async(process_batch, args=(conformer_files, atom_type_map, spoof_db, ph_type_idx, database_list), callback=partial(save_chunk_to_disk, chunk_data_file=chunk_data_file, chunk_info_file=chunk_info_file))
-            print(f"Processed batch {chunk+1}")
+            pool.apply_async(
+                process_batch, 
+                args=(conformer_files, atom_type_map, ph_type_idx, database_list), 
+                callback=partial(save_chunk_to_disk, 
+                        chunk_data_file=chunk_data_file, 
+                        chunk_info_file=chunk_info_file))
             chunk += 1
         
         pool.close()
         pool.join()
-
-    
-    
-
 
     # TODO: convert pharmacophore and names into tensors
     # TODO: can you combine the conformer_file -> smiles -> names into one query rather than two? one query that is batched?
