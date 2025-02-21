@@ -1,7 +1,7 @@
 import numpy as np
 from rdkit.Chem.Features import FeatDirUtilsRD as FeatDirUtils
 
-def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False, scale: float = 1.0):
+def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False):
     """Compute the direction vector for an aromatic feature."""
     
     v1 = atomsLoc[0] - featLoc
@@ -9,7 +9,6 @@ def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False, scale: fl
 
     normal = np.cross(v1, v2)
     normal = normal / np.linalg.norm(normal)
-    normal *= scale
     
     if return_both:
         normal2 = normal * -1
@@ -34,7 +33,7 @@ def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
     return vectors
 
 
-def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol, scale: float = 1.0):
+def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
     atom_idx = featAtoms[0]
     atom_coords = atomsLoc[0]
     atom = rdmol.GetAtomWithIdx(atom_idx)
@@ -84,15 +83,13 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol, scale: float = 1.0):
             rotAxis.Normalize()
             bv1 = FeatDirUtils.ArbAxisRotation(120, rotAxis, v1)
             bv1.Normalize()
-            bv1 *= scale
             bv2 = FeatDirUtils.ArbAxisRotation(-120, rotAxis, v1)
             bv2.Normalize()
-            bv2 *= scale
             return [np.array(bv1), np.array(bv2)]
 
         elif len(nbrs) == 2: # sp3
             bvec = FeatDirUtils._findAvgVec(conf, cpt, nbrs)
-            bvec *= (-1.0 * scale)
+            bvec *= -1.0
             # we will create two vectors by rotating bvec by half the tetrahedral angle in either directions
             v1 = conf.GetAtomPosition(nbrs[0].GetIdx())
             v1 -= cpt
@@ -104,8 +101,7 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol, scale: float = 1.0):
             bv2 = FeatDirUtils.ArbAxisRotation(-54.5, rotAxis, bvec)
             bv1.Normalize()
             bv2.Normalize()
-            bv1 *= scale
-            bv2 *= scale
+            
             return [np.array(bv1), np.array(bv2)]
         
     else:  

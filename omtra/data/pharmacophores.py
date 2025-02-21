@@ -2,7 +2,7 @@ import numpy as np
 import rdkit.Chem as Chem
 from scipy.spatial.distance import cdist
 from pharmvec import GetDonorFeatVects, GetAcceptorFeatVects, GetAromaticFeatVects
-import pprint
+from omtra.constants import ph_idx_to_type, ph_type_to_idx
 
 smarts_patterns = {
     'Aromatic': ["a1aaaaa1", "a1aaaa1"],
@@ -58,18 +58,18 @@ def get_smarts_matches(rdmol, smarts_pattern):
 
     return matches, atom_positions, feature_positions
 
-# get the vectors for all matches of a smarts pattern
 def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
+    """Return direction vector(s) for all matches of a smarts pattern"""
     vectors = []
     for featAtoms, atomsLoc, featLoc in zip(atom_idxs, atom_positions, feature_positions):
         if feature == 'Aromatic':
-            vectors.append(GetAromaticFeatVects(atomsLoc, featLoc, scale=1.0))
+            vectors.append(GetAromaticFeatVects(atomsLoc, featLoc))
         elif feature == 'HydrogenDonor':
             vectors.append(GetDonorFeatVects(featAtoms, atomsLoc, mol))
         elif feature == 'HydrogenAcceptor':
             vectors.append(GetAcceptorFeatVects(featAtoms, atomsLoc, mol))
         else:
-            vectors.append(np.zeros(3))
+            vectors.append([np.zeros(3)])
     return vectors
 
 def check_interaction(all_ligand_positions, receptor, feature):
@@ -133,14 +133,19 @@ def get_pharmacophore_dict(ligand, receptor=None):
                 
     return pharmacophores
 
-def get_pharmacophores(mol, ph_type_to_idx):
-    pharmacophores_dict = get_pharmacophore_dict(mol)
-    X, A, V = [], [], []
+def get_pharmacophores(mol, rec=None):
+    if rec:
+        pharmacophores_dict = get_pharmacophore_dict(mol, rec)
+    else:
+        pharmacophores_dict = get_pharmacophore_dict(mol)
+        
+    X, P, V, I = [], [], [], []
     for type in pharmacophores_dict:
         pos = pharmacophores_dict[type]['P']
-        A.extend(pos)
+        P.extend(pos)
         V.extend(pharmacophores_dict[type]['V'])
+        I.extend(pharmacophores_dict[type]['I'])
         type_embed = ph_type_to_idx[type]
         X.extend([type_embed]*len(pos))
 
-    return X, A, V
+    return X, P, V, I

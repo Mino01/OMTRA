@@ -283,17 +283,14 @@ def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
 
 def get_pharmacophore_data(mols):
 
-    # TODO: this should not be hard coded!!!!
-    ph_type_to_idx = {type:idx for idx, type in enumerate(args.pharm_types)}
-
     # collect all pharmacophore data
     all_x_pharm = []
     all_a_pharm = []
-    all_v_pharm = [] # vector
+    all_v_pharm = []
     
     failed_pharm_idxs = []
     for idx, mol in enumerate(mols):
-        x_pharm, a_pharm, v_pharm = get_pharmacophores(mol, ph_type_to_idx)
+        x_pharm, a_pharm, v_pharm, _ = get_pharmacophores(mol)
         if x_pharm is None:
             failed_pharm_idxs.append(idx)
             continue
