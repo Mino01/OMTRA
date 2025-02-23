@@ -50,10 +50,11 @@ def parse_args():
     p.add_argument('--pharm_types', type=list, default=['Aromatic','HydrogenDonor','HydrogenAcceptor','Hydrophobic','NegativeIon','PositiveIon'], help='Pharmacophore center types.')
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
+    p.add_argument('--max_num_atoms', type=int, default=120, help='Maximum number of atoms in a molecule.')
+
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--n_chunks', type=int, default=None, help='Number of to process. If None, process all. This is only for testing purposes.')
-    p.add_argument('--batches_per_query', type=int, default=4, help='Number of batches per query.')
 
     args = p.parse_args()
     return args
@@ -84,10 +85,7 @@ def crawl_conformer_files(db_dir: Path):
                 yield conformer_file
 
 
-
-    
-
-def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list):
+def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num_atoms):
     global name_finder
     mol_tensorizer = MoleculeTensorizer(atom_map=atom_type_map)
 
@@ -107,6 +105,16 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list):
         #print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
         mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
         conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
+
+    # filter molecules with too many atoms
+    too_big_idxs = []
+    for i, mol in enumerate(mols):
+        if mol.GetNumAtoms() > max_num_atoms:
+            too_big_idxs.append(i)
+    too_big_idxs = set(too_big_idxs)
+    mols = [mol for i, mol in enumerate(mols) if i not in too_big_idxs]
+    conformer_files = [file for i, file in enumerate(conformer_files) if i not in too_big_idxs]
+    smiles = [smile for i, smile in enumerate(smiles) if i not in too_big_idxs]
 
 
     # (BATCHED) Database source
@@ -143,10 +151,19 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list):
     databases  = generate_library_tensor(names, database_list)
 
     # Save tensors in dictionary
-    tensors = {'positions': positions, 'atom_types': atom_types, 'atom_charges': atom_charges, 'bond_types': bond_types, 'bond_idxs': bond_idxs, 'x_pharm': x_pharm, 'a_pharm': a_pharm, 'databases': databases}
+    tensors = {
+        'positions': positions, 
+        'atom_types': atom_types, 
+        'atom_charges': atom_charges, 
+        'bond_types': bond_types, 
+        'bond_idxs': bond_idxs, 
+        'x_pharm': x_pharm, 
+        'a_pharm': a_pharm, 
+        'databases': databases}
+    
     return tensors
 
-def run_parallel(args, batch_iter):
+def run_parallel(args, batch_iter, process_args: tuple):
     with Pool(processes=args.n_cpus, initializer=worker_initializer, initargs=(args.spoof_db,)) as pool:
         for chunk_idx, chunk_data in enumerate(batch_iter):
 
@@ -155,7 +172,7 @@ def run_parallel(args, batch_iter):
 
             pool.apply_async(
                 process_batch, 
-                args=(chunk_data, atom_type_map, ph_type_idx, database_list), 
+                args=(chunk_data, *process_args), 
                 callback=partial(save_chunk_to_disk, 
                         chunk_data_file=chunk_data_file, 
                         chunk_info_file=chunk_info_file))
@@ -164,14 +181,14 @@ def run_parallel(args, batch_iter):
         pool.close()
         pool.join()
 
-def run_single(args, batch_iter):
+def run_single(args, batch_iter, process_args: tuple):
     worker_initializer(args.spoof_db)
     for chunk_idx, chunk_data in enumerate(batch_iter):
 
         chunk_data_file = f"{args.chunk_data_dir}/data_chunk_{chunk_idx}.npz"
         chunk_info_file = f"{args.chunk_info_dir}/data_chunk_{chunk_idx}.pkl"
 
-        tensors = process_batch(chunk_data, atom_type_map, ph_type_idx, database_list)
+        tensors = process_batch(chunk_data, *process_args)
         save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file)
 
 
@@ -187,21 +204,21 @@ if __name__ == '__main__':
     os.makedirs(args.chunk_data_dir, exist_ok=True)
     os.makedirs(args.chunk_info_dir, exist_ok=True)
 
-    batches_per_query = args.batches_per_query
-
     if args.n_chunks is None:
         args.n_chunks = float('inf')
 
     db_crawler = DBCrawler(query_size=args.batch_size, 
                            max_num_queries=args.n_chunks,
                            spoof_db=spoof_db)
+    
+    process_args = (atom_type_map, ph_type_idx, database_list, args.max_num_atoms)
 
     start_time = time.time()
 
     if args.n_cpus == 1:
-        run_single(args, db_crawler)
+        run_single(args, db_crawler, process_args)
     else:
-        run_parallel(args, db_crawler)
+        run_parallel(args, db_crawler, process_args)
 
     end_time = time.time()
     print(f"Total time: {end_time - start_time:.1f} seconds")

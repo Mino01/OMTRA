@@ -243,6 +243,13 @@ def save_chunk_to_disk(tensors, chunk_data_file, chunk_info_file):
         'database': databases
     }
 
+    # Convert data types
+    chunk_data_dict['lig_x'] = chunk_data_dict['lig_x'].astype(np.float32)
+    chunk_data_dict['pharm_x'] = chunk_data_dict['pharm_x'].astype(np.float32)
+    chunk_data_dict['lig_a'] = chunk_data_dict['lig_a'].astype(np.uint8)
+    chunk_data_dict['pharm_a'] = chunk_data_dict['pharm_a'].astype(np.uint8)
+    chunk_data_dict['lig_c'] = chunk_data_dict['lig_c'].astype(np.int32)
+
 
     # Save tensor dictionary to npz file
     with open(chunk_data_file, 'wb') as f:
@@ -281,7 +288,7 @@ def generate_library_tensor(names, database_list):
     num_libraries = len(database_list)
     
     # Initialize the binary tensor with zeros
-    library_tensor = np.zeros((num_mols, num_libraries), dtype=int)
+    library_tensor = np.zeros((num_mols, num_libraries), dtype=bool)
     
     for i, molecule_names in enumerate(names):
         for j, db in enumerate(database_list):
