@@ -105,10 +105,16 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     smiles = [smile for i, smile in enumerate(smiles) if i not in too_big_idxs]
 
     # Get pharmacophore data
-    x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files, ph_type_idx)
+    start_time = time.time()
+    x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
+    end_1 = time.time()
+    r = get_pharmacophore_data_pharmit(conformer_files=conformer_files, ph_type_idx=ph_type_idx)
+    end_2 = time.time()
+    print(f"Time for get_pharmacophore_data: {end_1 - start_time:.1f} seconds")
+    print(f"Time for get_pharmacophore_data_pharmit: {end_2 - end_1:.1f} seconds")
     # Remove ligands where pharmacophore generation failed
     if len(failed_pharm_idxs) > 0 :
-        #print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
+        print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
         mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
         names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
         
@@ -118,10 +124,12 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:
         #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
+        failed_xace_idxs = set(failed_xace_idxs)
         mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
         names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
         x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
         a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
+        v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]
     
 
     # Save tensors in dictionary
@@ -133,6 +141,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         'bond_idxs': bond_idxs, 
         'x_pharm': x_pharm, 
         'a_pharm': a_pharm, 
+        'v_pharm': v_pharm,
         'databases': databases}
     
     return tensors

@@ -23,7 +23,6 @@ def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
     vectors = []
     
     for nbor in rdmol.GetAtomWithIdx(atom_idx).GetNeighbors():
-        print(nbor.GetAtomicNum())
         if nbor.GetAtomicNum() == 1:  # hydrogen atom
             nbor_coords = np.array(rdmol.GetConformer().GetAtomPosition(nbor.GetIdx()))
             vec = nbor_coords - atom_coords

@@ -1,7 +1,7 @@
 import numpy as np
 import rdkit.Chem as Chem
 from scipy.spatial.distance import cdist
-from pharmvec import GetDonorFeatVects, GetAcceptorFeatVects, GetAromaticFeatVects
+from omtra.data.pharmvec import GetDonorFeatVects, GetAcceptorFeatVects, GetAromaticFeatVects
 from omtra.constants import ph_idx_to_type, ph_type_to_idx
 
 smarts_patterns = {
@@ -148,4 +148,6 @@ def get_pharmacophores(mol, rec=None):
         type_embed = ph_type_to_idx[type]
         X.extend([type_embed]*len(pos))
 
+    P = np.asarray(P)
+    
     return X, P, V, I
