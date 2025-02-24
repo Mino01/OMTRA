@@ -1,28 +1,24 @@
 import argparse
 from pathlib import Path
-import gzip
-from rdkit import Chem
-import pymysql
-import itertools
-import re
+import traceback
+import shutil
+from tqdm import tqdm
 
-from rdkit.Chem import AllChem as Chem
-import numpy as np
-from collections import defaultdict
-import zarr
-import time
-import os
+from multiprocessing import Pool
+from functools import partial
 
 from omtra.data.xace_ligand import MoleculeTensorizer
-from omtra.utils.graph import build_lookup_table
-from omtra.data.pharmacophores import get_pharmacophores
-from tempfile import TemporaryDirectory
+import time
 
-# TODO: this script should actually take as input just a hydra config 
-# - but Ramith is setting up our hydra stuff yet, and we don't 
-# yet know what the config for this dataset processing component will look like
-# so for now just argparse, and once its written it'll be easy/concrete to 
-# port into a hydra config
+
+from omtra_pipelines.pharmit_dataset.phase1 import *
+
+# Global variable to hold the NameFinder object
+name_finder = None
+
+def worker_initializer(spoof_db):
+    global name_finder
+    name_finder = NameFinder(spoof_db=spoof_db)
  
 def parse_args():
     p = argparse.ArgumentParser(description='Process pharmit data')
@@ -33,438 +29,231 @@ def parse_args():
     p.add_argument('--db_dir', type=Path, default='./pharmit_small/')
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
+    
+
+    p.add_argument('--output_dir', type=Path,
+                   help='Output directory for processed data.', 
+                   default=Path('./outputs/phase1'))
+    
+    p.add_argument('--overwrite', action='store_true', help='Remove anything in existing output directory.')
+
     p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I"])
-    p.add_argument('--chunk_info_dir', type=str, help='Output directory for information on data chunk files.')
-    p.add_argument('--chunk_data_dir', type=str, help='Output directory for tensor chunks.')
     p.add_argument('--batch_size', type=int, default=50, help='Number of conformer files to batch togther.')
     p.add_argument('--pharm_types', type=list, default=['Aromatic','HydrogenDonor','HydrogenAcceptor','Hydrophobic','NegativeIon','PositiveIon'], help='Pharmacophore center types.')
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
+    p.add_argument('--max_num_atoms', type=int, default=120, help='Maximum number of atoms in a molecule.')
+    p.add_argument('--chunk_offload_threshold', type=int, default=1000, help='Threshold for offloading chunks to disk, in MB.')
+    p.add_argument('--register_write_interval', type=int, default=10, help='Interval for recording processed chunks.')
+
+    p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
+    p.add_argument('--n_chunks', type=int, default=None, help='Number of to process. If None, process all. This is only for testing purposes.')
 
     args = p.parse_args()
     return args
 
+def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num_atoms):
+    global name_finder
+    mol_tensorizer = MoleculeTensorizer(atom_map=atom_type_map)
 
-"""
-def extract_pharmacophore_data(mol):
-    
-    Parses pharmacophore data from an RDKit molecule object into a dictionary.
+    # chunk data is a list of tuples, each tuple contains (conformer_file, smile)
 
-    Args:
-        mol (rdkit.Chem.rdchem.Mol): RDKit molecule object containing pharmacophore data.
+    smiles, conformer_files = chunk_data
 
-    Returns:
-        dict: Parsed pharmacophore data with types as keys and lists of tuples as values.
-    
-    pharmacophore_data = mol.GetProp("pharmacophore") if mol.HasProp("pharmacophore") else None
-    if pharmacophore_data is None:
-        return None
+    # (BATCHED) Database source
+    names, failed_names_idxs = name_finder.query_name_from_smiles(smiles)
 
-    parsed_data = []
-    lines = pharmacophore_data.splitlines()
-    for line in lines:
-        parts = line.split()
-        if len(parts) >= 4:
-            ph_type = parts[0]  # Pharmacophore type
-            try:
-                coordinates = tuple(map(float, parts[1:4]))  # Extract the 3 float values
-                parsed_data.append((ph_type, coordinates))
-            except ValueError:
-                print(f"Skipping line due to parsing error: {line}")
+    # Remove molecules that couldn't get database data
+    if len(failed_names_idxs) > 0:
+        #print("Database sources for", len(failed_names_idxs), "could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
 
-    return parsed_data
-"""
+    # Tensorize database sources
+    databases = generate_library_tensor(
+        names, 
+        database_list, 
+        filter_unknown=False,
+        other_category=True
+    )
+    # databases, failed_idxs = generate_library_tensor(names, database_list, filter_unknown=True)
+    # mols = [  mol for i, mol in enumerate(mols) if i not in failed_idxs]
+    # conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_idxs]
+    # smiles = [smile for i, smile in enumerate(smiles) if i not in failed_idxs]
 
-class NameFinder():
+    # Get RDKit Mol objects
+    mols = [read_mol_from_conf_file(file) for file in conformer_files]
+    # Find molecules that failed to featurize and count them
+    failed_mol_idxs = []
+    for i in range(len(mols)):
+        if mols[i] is None:
+            failed_mol_idxs.append(i)
 
-    def __init__(self, spoof_db=False):
+    if len(failed_mol_idxs) > 0:
+        #print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
+        conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
 
-        if spoof_db:
-            self.conn = None
-        else:
-            self.conn = pymysql.connect(
-                host="localhost",
-                user="pharmit", 
-                db="conformers",)
-                # password="",
-                # unix_socket="/var/run/mysqld/mysqld.sock")
-            self.cursor = self.conn.cursor()
+    # filter molecules with too many atoms
+    too_big_idxs = []
+    for i, mol in enumerate(mols):
+        if mol.GetNumAtoms() > max_num_atoms:
+            too_big_idxs.append(i)
+    too_big_idxs = set(too_big_idxs)
+    mols = [mol for i, mol in enumerate(mols) if i not in too_big_idxs]
+    conformer_files = [file for i, file in enumerate(conformer_files) if i not in too_big_idxs]
+    smiles = [smile for i, smile in enumerate(smiles) if i not in too_big_idxs]
 
-    def query_name(self, smiles: str):
-
-        if self.conn is None:
-            return ['PubChem', 'ZINC', 'MolPort']
-
-        with self.conn.cursor() as cursor:
-            cursor.execute("SELECT name FROM names WHERE smile = %s", (smiles,))
-            names = cursor.fetchall()
-        names = list(itertools.chain.from_iterable(names))
-        return self.extract_prefixes(names)
-    
-
-    def query_name_batch(self, smiles_list: list[str]):
-        if self.conn is None:
-            return [['PubChem', 'ZINC', 'MolPort'] for smiles in smiles_list], []
-
-        # Ensure the input is unique to avoid unnecessary duplicates in the result -> Need to preserve list order to match to other lists. TODO: find smarter way to handle duplicates
-        #smiles_list = list(set(smiles_list))
-
-        with self.conn.cursor() as cursor:
-            # Use the IN clause to query multiple SMILES strings
-            query = "SELECT smile, name FROM names WHERE smile IN %s"
-            cursor.execute(query, (tuple(smiles_list),))
-            results = cursor.fetchall()
-
-        # Organize results into a dictionary: {smile: [names]}
-        smiles_to_names = {smile: None for smile in smiles_list}
+    # Get pharmacophore data
+    x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files, ph_type_idx)
+    # Remove ligands where pharmacophore generation failed
+    if len(failed_pharm_idxs) > 0 :
+        #print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
+        names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
         
-        for smile, name in results:
-            if smile not in smiles_to_names:
-                smiles_to_names[smile] = []
-            smiles_to_names[smile].append(name)
-        
-        failed_idxs = [smiles_list.index(smile) for smile in smiles_to_names if smiles_to_names[smile] is None]  # Get the indices of failed smile in smiles_list
-        names = [names for smile, names in smiles_to_names.items() if names is not None] # Remove None entries 
-
-        return names, failed_idxs
+    
+    # Get XACE data
+    positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
+    # Remove molecules that failed to get xace data
+    if len(failed_xace_idxs) > 0:
+        #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
+        names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
+        x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
+        a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
     
 
-    def extract_prefixes(self, names):
-        """
-        Extracts prefixes from a list of names where the prefix consists of 
-        all characters at the start of the string that are not numbers or special characters.
-        
-        Args:
-            names (list of str): A list of strings representing molecule names.
-            
-        Returns:
-            list of str: A list of prefixes extracted from the names.
-        """
-        prefixes = set()
-        for name in names:
-            # Use a regex to match all letters at the start of the string
-            match = re.match(r'^[A-Za-z]+', name)
-            if match:
-                prefixes.add(match.group(0))
-            else:
+    # Save tensors in dictionary
+    tensors = {
+        'positions': positions, 
+        'atom_types': atom_types, 
+        'atom_charges': atom_charges, 
+        'bond_types': bond_types, 
+        'bond_idxs': bond_idxs, 
+        'x_pharm': x_pharm, 
+        'a_pharm': a_pharm, 
+        'databases': databases}
+    
+    return tensors
+
+def save_and_update(result, chunk_idx, pbar, chunk_saver):
+    # Save the result using your existing callback logic.
+    chunk_saver.save_chunk_to_disk(result, chunk_idx=chunk_idx)
+    # Update the progress bar by one step.
+    pbar.update(1)
+
+def error_and_update(error, pbar, error_counter):
+    """Handle errors, update error counter and the progress bar."""
+    print(f"Error: {error}")
+    traceback.print_exception(type(error), error, error.__traceback__)
+    # Increment the error counter (using a mutable container)
+    error_counter[0] += 1
+    # Optionally, update the tqdm bar's postfix to show the current error count.
+    pbar.set_postfix({'errors': error_counter[0]})
+    # Advance the progress bar, since this job is considered done.
+    pbar.update(1)
+
+
+def run_parallel(n_cpus: int, spoof_db: bool, batch_iter: DBCrawler, 
+                 chunk_saver: ChunkSaver, process_args: tuple, 
+                 max_pending: int = None):
+    # Set a default limit if not provided
+    if max_pending is None:
+        max_pending = n_cpus * 2  # adjust this factor as needed
+
+    total_tasks = len(batch_iter)
+    pbar = tqdm(total=total_tasks, desc="Processing", unit="chunks")
+    # Use a mutable container to track errors.
+    error_counter = [0]
+
+    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
+        pending = []
+        for chunk_idx, chunk_data in enumerate(batch_iter):
+
+            if chunk_saver.chunk_processed(chunk_idx):
+                pbar.update(1)
                 continue
-        return list(prefixes)
-    
-    def query_smiles_from_file(self, conformer_file: Path):
-        with self.conn.cursor() as cursor:
-            cursor.execute("SELECT smile FROM structures WHERE sdfloc = %s", (str(conformer_file),))
-            smiles = cursor.fetchall()
-        return smiles
 
+            # Wait until the number of pending jobs is below the threshold.
+            # We remove finished tasks from the list, and if still too many remain,
+            # we sleep briefly before re-checking.
+            while len(pending) >= max_pending:
+                # Filter out jobs that have finished
+                pending = [r for r in pending if not r.ready()]
+                if len(pending) >= max_pending:
+                    time.sleep(0.1)  # brief pause before checking again
 
-    def query_smiles_from_file_batch(self, conformer_files: list[Path]):
+            # Wrap the original success callback to also update the progress bar.
+            callback_fn = partial(save_and_update, chunk_idx=chunk_idx, pbar=pbar, chunk_saver=chunk_saver)
+            # Wrap the error callback to update the progress bar and error counter.
+            error_callback_fn = partial(error_and_update, pbar=pbar, error_counter=error_counter)
 
-        if self.conn is None:
-            return ['CC' for file in conformer_files], []
+            # Submit the job and add its AsyncResult to the pending list
+            result = pool.apply_async(
+                process_batch, 
+                args=(chunk_data, *process_args), 
+                callback=callback_fn,
+                error_callback=error_callback_fn
+            )
+            pending.append(result)
 
-        file_to_smile = {Path(file): None for file in conformer_files}  # Dictionary to map conformer file to smile
+        # After submitting all jobs, wait for any remaining tasks to complete.
+        for result in pending:
+            result.wait()
 
-        # failure will be different than a mysqlerror; there just wont be an entry if the file is not in the database
-        with self.conn.cursor() as cursor:
-            query = "SELECT sdfloc, smile FROM structures WHERE sdfloc IN %s"
-            cursor.execute(query, (tuple(str(file) for file in conformer_files),))
-            results = cursor.fetchall()
+        pool.close()
+        pool.join()
 
-        for sdfloc, smile in results:
-            file_to_smile[Path(sdfloc)] = smile  # Update with successfull queries
+def run_single(spoof_db, batch_iter, chunk_saver, process_args: tuple):
+    worker_initializer(spoof_db)
+    pbar = tqdm(total=len(batch_iter), desc="Processing", unit="chunks")
+    for chunk_idx, chunk_data in enumerate(batch_iter):
 
-        failed_idxs = []
-        for i, file in enumerate(conformer_files):
-            if file_to_smile[Path(file)] is None:
-                failed_idxs.append(i)
-        
-        smiles = [smile for smile in file_to_smile.values() if smile is not None] # Remove None entries 
-
-        return smiles, failed_idxs
-    
-
-def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
-    with gzip.open(conf_file, 'rb') as gzipped_sdf:
-        suppl = Chem.ForwardSDMolSupplier(gzipped_sdf)
-        try:
-            for mol in suppl:
-                if mol is not None:
-                    return mol # Changed from break
-            if mol is None:
-                #print(f"Failed to parse a molecule from {conf_file}")
-                return None
-        except Exception as e:
-            #print("Error parsing file", conf_file)
-            return None
-
-
-def crawl_conformer_files(db_dir: Path):
-    for data_dir in db_dir.iterdir():
-        conformers_dir = data_dir / 'conformers'
-        for conformer_subdir in conformers_dir.iterdir():
-            for conformer_file in conformer_subdir.iterdir():
-                yield conformer_file
-
-
-def batch_generator(iterable, batch_size):
-    """  
-    Gets batches of conformer files
-
-    Args: 
-        iterable: Generator that crawls the conformer files
-        batch_size: Size of the batches
-    
-    Returns:
-        batch: List of conformer file paths of length batch_size (or remaining files)
-    """
-    batch = []
-    for item in iterable:
-        batch.append(item)
-        if len(batch) == batch_size:
-            yield batch
-            batch = []  # Reset the batch
-
-    if batch:  # Remaining items that didn't fill a complete batch
-        yield batch
-
-
-def compute_rmsd(mol1, mol2):
-    return Chem.CalcRMS(mol1, mol2)
-
-
-def minimize_molecule(molecule: Chem.rdchem.Mol):
-
-    # create a copy of the original ligand
-    lig = Chem.Mol(molecule)
-
-    # Add hydrogens
-    lig_H = Chem.AddHs(lig, addCoords=True)
-    Chem.SanitizeMol(lig_H)
-
-    try:
-        ff = Chem.UFFGetMoleculeForceField(lig_H,ignoreInterfragInteractions=False)
-    except Exception as e:
-        print("Failed to get force field:", e)
-        return None
-
-    # documentation for this function call, incase we want to play with number of minimization steps or record whether it was successful: https://www.rdkit.org/docs/source/rdkit.ForceField.rdForceField.html#rdkit.ForceField.rdForceField.ForceField.Minimize
-    try:
-        ff.Minimize(maxIts=400)
-    except Exception as e:
-        print("Failed to minimize molecule")
-        return None
-
-    # Get the minimized positions for molecule with H's
-    cpos = lig_H.GetConformer().GetPositions()
-
-    # Original ligand with no H's
-    conf = lig.GetConformer()
-
-    for (i,xyz) in enumerate(cpos[-lig.GetNumAtoms():]):
-        conf.SetAtomPosition(i,xyz)
-    
-    return lig
-
-
-def remove_counterions_batch(mols: list[Chem.Mol], counterions: list[str]):
-    for idx in range(len(mols)):
-        mol = mols[idx]
-        for i, atom in enumerate(mol.GetAtoms()):
-            if str(atom.GetSymbol()) in counterions:
-                print(f"Atom {atom.GetSymbol()} is a known counterion. Removing and minimizing structure.")
-                mol_cpy = Chem.EditableMol(mol)
-                mol_cpy.RemoveAtom(i)
-                mol_cpy = mol_cpy.GetMol()
-                mol = minimize_molecule(mol_cpy)
-                mols[idx] = mol
-    return mols
-    
-
-
-def get_pharmacophore_data(mols):
-
-    # collect all pharmacophore data
-    all_x_pharm = []
-    all_a_pharm = []
-    all_v_pharm = []
-    
-    failed_pharm_idxs = []
-    for idx, mol in enumerate(mols):
-        x_pharm, a_pharm, v_pharm, _ = get_pharmacophores(mol)
-        if x_pharm is None:
-            failed_pharm_idxs.append(idx)
+        if chunk_saver.chunk_processed(chunk_idx):
+            pbar.update(1)
             continue
-        
-        all_x_pharm.append(x_pharm)
-        all_a_pharm.append(a_pharm)
-        all_v_pharm.append(v_pharm)
 
-    return all_x_pharm, all_a_pharm, all_v_pharm, failed_pharm_idxs
-    
-def generate_library_tensor(names):
-    """
-    Generates a binary tensor indicating whether each molecule belongs to any of the specified libraries.
-
-    Args:
-        names (list of list of str): A list of lists containing the database names for each molecule.
-
-    Returns:
-        np.ndarray: A binary tensor of shape (num_mols, num_libraries) where each element is 1 if the molecule belongs to the library, otherwise 0.
-    """
-    num_mols = len(names)
-    num_libraries = len(args.databases)
-    
-    # Initialize the binary tensor with zeros
-    library_tensor = np.zeros((num_mols, num_libraries), dtype=int)
-    
-    for i, molecule_names in enumerate(names):
-        for j, db in enumerate(args.databases):
-            if db in molecule_names:
-                library_tensor[i, j] = 1
-    
-    return library_tensor
-    
-def save_chunk_to_disk(output_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, v_pharm, databases):
-
-    # Record the number of nodes and edges in each molecule and convert to numpy arrays
-    batch_num_nodes = np.array([x.shape[0] for x in positions])
-    batch_num_edges = np.array([eidxs.shape[0] for eidxs in bond_idxs])
-    batch_num_pharm_nodes = np.array([x.shape[0] for x in x_pharm])
-
-    # concatenate all the data together
-    x = np.concatenate(positions, axis=0)
-    a = np.concatenate(atom_types, axis=0)
-    c = np.concatenate(atom_charges, axis=0)
-    e = np.concatenate(bond_types, axis=0)
-    edge_index = np.concatenate(bond_idxs, axis=0)
-    x_pharm = np.concatenate(x_pharm, axis=0)
-    a_pharm = np.concatenate(a_pharm, axis=0)
-    v_pharm = np.concatenate(v_pharm, axis=0)
-    db = np.concatenate(databases, axis=0)
-
-    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's node features
-    node_lookup = build_lookup_table(batch_num_nodes)
-
-    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's edge features
-    edge_lookup = build_lookup_table(batch_num_edges)
-
-    # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
-    pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
-    # Create data dictionary
-    chunk_data_dict ={ 
-        'lig_x': x,
-        'lig_a': a,
-        'lig_c': c,
-        'node_lookup': node_lookup,
-        'lig_e': e,
-        'lig_edge_idx': edge_index,
-        'edge_lookup': edge_lookup,
-        'pharm_x': x_pharm,
-        'pharm_a': a_pharm,
-        'pharm_v': v_pharm,
-        'pharm_lookup': pharm_node_lookup,
-        'database': databases
-    }
-
-    # Save dictionary to npz file
-    with open(output_file, 'wb') as f:
-        np.savez(f, chunk_data_dict)
-
-    return len(x), len(e), len(x_pharm)
-
+        tensors = process_batch(chunk_data, *process_args)
+        chunk_saver.save_chunk_to_disk(tensors, chunk_idx=chunk_idx)
+        pbar.update(1)
 
 
 if __name__ == '__main__':
+
     args = parse_args()
-    mol_tensorizer = MoleculeTensorizer(atom_map=args.atom_type_map)
-    name_finder = NameFinder(spoof_db=args.spoof_db)
+    database_list = args.databases
+    atom_type_map = args.atom_type_map
+    spoof_db = args.spoof_db
+    ph_type_idx = {type:idx for idx, type in enumerate(args.pharm_types)}
 
-    os.makedirs(args.chunk_data_dir, exist_ok=True)
-    os.makedirs(args.chunk_info_dir, exist_ok=True)
+    if args.n_chunks is None:
+        args.n_chunks = float('inf')
 
-    batch_size = args.batch_size # Batch size for queries and processing to disk (memory clearing)
-    chunks = 0
+    if args.output_dir.exists() and args.overwrite:
+        shutil.rmtree(args.output_dir)
 
-    for conformer_files in batch_generator(crawl_conformer_files(args.db_dir), batch_size):
-        chunks += 1
+    chunk_saver = ChunkSaver(
+        output_dir=args.output_dir,
+        register_write_interval=args.register_write_interval,
+        chunk_offload_threshold_mb=args.chunk_offload_threshold
+    )
 
-        # Get RDKit Mol objects
-        mols = [read_mol_from_conf_file(file) for file in conformer_files]
-        # Find molecules that failed to featurize and count them
-        failed_mol_idxs = []
-        for i in range(len(mols)):
-            if mols[i] is None:
-                failed_mol_idxs.append(i)
-
-        if len(failed_mol_idxs) > 0:
-            print("Mol objects for", len(failed_mol_idxs), "could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_mol_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_mol_idxs]
-
-        # (BATCHED) SMILES representations
-        smiles, failed_smiles_idxs = name_finder.query_smiles_from_file_batch(conformer_files)
-        # Remove molecules that couldn't get SMILES data
-        if len(failed_smiles_idxs) > 0:
-            print("SMILEs for", len(failed_smiles_idxs), "conformer files could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_smiles_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_smiles_idxs]
-
-
-        # (BATCHED) Database source
-        names, failed_names_idxs = name_finder.query_name_batch(smiles)
-        # Remove molecules that couldn't get database data
-        if len(failed_names_idxs) > 0:
-            print("Database sources for", len(failed_names_idxs), "could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_names_idxs]
-            conformer_files = [file for i, file in enumerate(conformer_files) if i not in failed_names_idxs]
-
-
-        # Get pharmacophore data
-        x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
-        # Remove ligands where pharmacophore generation failed
-        if len(failed_pharm_idxs) > 0 :
-            print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
-            names = [name for i, name in enumerate(names) if i not in failed_pharm_idxs]
-            
-        
-        # Get XACE data
-        positions, atom_types, atom_charges, bond_types, bond_idxs, num_xace_failed, failed_xace_idxs = mol_tensorizer.featurize_molecules(mols) # (BATCHED) Tensor representation of molecules
-        # Remove molecules that failed to get xace data
-        if len(failed_xace_idxs) > 0:
-            print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
-            mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
-            names = [name for i, name in enumerate(names) if i not in failed_xace_idxs]
-            x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
-            a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
-            v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]
-        
-       
-        # Tensorize database sources
-        databases  = generate_library_tensor(names)
-
-        # Format and save tensors to disk
-        output_chunk_file = f"{args.chunk_data_dir}/data_chunk_{chunks}.npz"
-        num_atoms, num_edges, num_pharm = save_chunk_to_disk(output_chunk_file, positions, atom_types, atom_charges, bond_types, bond_idxs, x_pharm, a_pharm, v_pharm, databases)
-        
-        # Record number of molecules in data chunk file to txt file
-        output_info_file = f"{args.chunk_info_dir}/data_chunk_{chunks}.txt"
-        with open(output_info_file, "w") as f:
-            f.write("File, Mols, Atoms, Edges, Pharm \n")
-            line = f"{output_chunk_file}, {len(mols)}, {num_atoms}, {num_edges}, {num_pharm} \n"
-            f.write(line)
-        
-        print(f"Processed batch {chunks}")
-        print("––––––––––––––––––––––––––––––––––––––––––––––––")
-
+    db_crawler = DBCrawler(query_size=args.batch_size, 
+                           max_num_queries=args.n_chunks,
+                           spoof_db=spoof_db)
     
+    process_args = (atom_type_map, ph_type_idx, database_list, args.max_num_atoms)
 
-    # TODO: convert pharmacophore and names into tensors
-    # TODO: can you combine the conformer_file -> smiles -> names into one query rather than two? one query that is batched?
-    # TODO: process molecules in batches; 
-    #     this includes using the NameFinder.query_batch method instead of NameFinder.query
-    #     you can also batch with NameFinder.query_smiles_from_file_batch in stead of NameFinder.query_smiles_from_file
-    #     MoleculeTensorizer can handle batches of molecules
-    # TODO: parallelize processing: hand chunks of conformer files to subprocesses
-    # TODO: write molecules to disk in chunks
-        
+    start_time = time.time()
+
+    if args.n_cpus == 1:
+        run_single(spoof_db, db_crawler, chunk_saver, process_args)
+    else:
+        run_parallel(args.n_cpus, spoof_db, db_crawler, chunk_saver, process_args)
+
+    # off load last remaining chunks to masuda
+    chunk_saver.offload_chunks()
+
+    end_time = time.time()
+    print(f"Total time: {end_time - start_time:.1f} seconds")
