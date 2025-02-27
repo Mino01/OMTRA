@@ -23,6 +23,7 @@ from collections import defaultdict
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
+from omtra.data.pharmacophores import get_pharmacophores
 from tempfile import TemporaryDirectory
 
 def read_mol_from_conf_file(conf_file):    # Returns Mol representaton of first conformer
@@ -278,7 +279,27 @@ class DBCrawler(PharmitDBConnector):
 
         return results
 
-def get_pharmacophore_data(conformer_files, ph_type_idx, tmp_path: Path = None):
+def get_pharmacophore_data(mols):
+
+    # collect all pharmacophore data
+    all_x_pharm = []
+    all_a_pharm = []
+    all_v_pharm = []
+    
+    failed_pharm_idxs = []
+    for idx, mol in enumerate(mols):
+        x_pharm, a_pharm, v_pharm, _ = get_pharmacophores(mol)
+        if x_pharm is None:
+            failed_pharm_idxs.append(idx)
+            continue
+        
+        all_x_pharm.append(x_pharm)
+        all_a_pharm.append(a_pharm)
+        all_v_pharm.append(v_pharm)
+
+    return all_x_pharm, all_a_pharm, all_v_pharm, failed_pharm_idxs
+
+def get_pharmacophore_data_pharmit(conformer_files, ph_type_idx, tmp_path: Path = None):
 
     # create a temporary directory if one is not provided
     delete_tmp_dir = False

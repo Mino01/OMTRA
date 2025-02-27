@@ -108,10 +108,15 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         databases = databases[~failed_mask]
 
     # Get pharmacophore data
-    x_pharm, a_pharm, failed_pharm_idxs = get_pharmacophore_data(conformer_files, ph_type_idx)
+    # TODO: x_pharm contains types, and a_pharm contains positions
+    # TODO: v_pharm contains variable number of vectors per center, 
+    # TODO: and defaults to 1 vector for pharm types with no directionality
+    # we want this to have a tensor for each molecule of shape (num_pharm_centers, num_vectors, 3)
+    # where num_vectors is the maximum number of vectors for any pharmacophore center
+    x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
     # Remove ligands where pharmacophore generation failed
     if len(failed_pharm_idxs) > 0 :
-        #print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
+        print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
         x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_pharm_idxs]
         a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_pharm_idxs]
         mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
@@ -125,14 +130,17 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:
         #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
+        failed_xace_idxs = set(failed_xace_idxs)
         x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
         a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
         failed_mask = np.zeros(len(x_pharm), dtype=bool)
         failed_mask[failed_xace_idxs] = True
         databases = databases[~failed_mask]
+        v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]
 
     # sanity check
     assert databases.shape[0] == len(positions) == len(x_pharm) == len(a_pharm)
+        
     
 
     # Save tensors in dictionary
@@ -144,6 +152,7 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         'bond_idxs': bond_idxs, 
         'x_pharm': x_pharm, 
         'a_pharm': a_pharm, 
+        'v_pharm': v_pharm,
         'databases': databases}
     
     return tensors
