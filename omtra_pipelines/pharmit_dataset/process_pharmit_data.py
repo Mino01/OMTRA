@@ -130,6 +130,9 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         failed_mask = np.zeros(len(x_pharm), dtype=bool)
         failed_mask[failed_xace_idxs] = True
         databases = databases[~failed_mask]
+
+    # sanity check
+    assert databases.shape[0] == len(positions) == len(x_pharm) == len(a_pharm)
     
 
     # Save tensors in dictionary
