@@ -448,6 +448,19 @@ class ChunkSaver():
         # create an array of indicies to keep track of the start_idx and end_idx of each molecule's pharmacophore node features
         pharm_node_lookup = build_lookup_table(batch_num_pharm_nodes)
 
+        # get information for reconstructing the distribution of atoms in molecules
+        unique_n_atoms, n_atoms_counts = np.unique(batch_num_nodes, return_counts=True)
+
+        # get the distribution for p(n_pharms | n_atoms)
+        per_natom_pharm_counts = defaultdict(list)
+        for n_atoms, n_pharms in zip(batch_num_nodes, batch_num_pharm_nodes):
+            per_natom_pharm_counts[n_atoms].append(n_pharms)
+
+        p_pharms_given_atoms = {} # unnormalized distribution of n_pharms given n_atoms
+        for n_atoms, n_pharms_observed in per_natom_pharm_counts.items():
+            p_pharms_given_atoms[n_atoms] = np.unique(n_pharms_observed, return_counts=True)
+        
+
         # Tensor dictionary
         chunk_data_dict = { 
             'lig_x': x,
@@ -482,7 +495,9 @@ class ChunkSaver():
             'n_mols': len(node_lookup),
             'n_atoms': len(x),
             'n_edges': len(e),
-            'n_pharm': len(x_pharm)
+            'n_pharm': len(x_pharm),
+            'p_atoms': (unique_n_atoms, n_atoms_counts),
+            'p_pharms_given_atoms': p_pharms_given_atoms
         }
         
         # Dump info dictionary in pickle files
