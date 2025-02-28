@@ -2,6 +2,7 @@ from typing import Dict, List
 import numpy as np
 from rdkit import Chem
 import torch
+import traceback
 
 from multiprocessing import Pool
 
@@ -72,14 +73,20 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
 
     # kekulize the molecule
     try:
-        Chem.Kekulize(molecule)
-    except Chem.KekulizeException as e:
-        print(f"Kekulization failed for molecule {molecule.GetProp('_Name')}", flush=True)
+        Chem.SanitizeMol(molecule)
+        Chem.Kekulize(molecule, clearAromaticFlags=True)
+    except Exception as e:
+        traceback.print_exc()
         return None, None, None, None, None
 
     # if explicit_hydrogens is False, remove all hydrogens from the molecule
     if not explicit_hydrogens:
         molecule = Chem.RemoveHs(molecule)
+
+    num_fragments = len(Chem.GetMolFrags(molecule, sanitizeFrags=False))
+    if num_fragments > 1:
+        print(f"Fragmented molecule with {num_fragments} fragments", flush=True)
+        return None, None, None, None, None
 
     # get positions
     positions = molecule.GetConformer().GetPositions()
@@ -102,6 +109,10 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
     edge_index = np.triu(adj).nonzero()  # upper triangular portion of adjacency matrix
     edge_index = np.stack(edge_index, axis=-1)  # shape (n_edges, 2)
 
+    valencies = adj.sum(dim=1)
+    tcv = torch.stack([atom_types, atom_charges, valencies], dim=1)
+    unique_valencies = torch.unique(tcv, dim=0)
+
     # note that because we take the upper-triangular portion of the adjacency matrix, there is only one edge per bond
     # at training time for every edge (i,j) in edge_index, we will also add edges (j,i)
     # we also only retain existing bonds, but then at training time we will add in edges for non-existing bonds
@@ -115,7 +126,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
     atom_charges = atom_charges.astype(np.int32)
     edge_attr = bond_types.astype(np.int32)
 
-    return positions, atom_types, atom_charges, edge_attr, edge_index, 
+    return positions, atom_types, atom_charges, edge_attr, edge_index, unique_valencies
 
 
 def sparse_to_dense(x, a, c, e, edge_idxs):

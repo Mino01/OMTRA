@@ -220,13 +220,13 @@ class DBCrawler(PharmitDBConnector):
             int: The number of rows in the table.
         """
         with self.conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM structures")
-            count = cursor.fetchone()[0]
+            cursor.execute("SHOW TABLE STATUS LIKE 'structures';")
+            count = cursor.fetchone()[4]
         return count
     
     def __len__(self):
         if self.max_num_queries == float('inf'):
-            n_rows = self.row_count()
+            n_rows = self.row_count
         else:
             n_rows = self.max_num_queries*self.query_size
 

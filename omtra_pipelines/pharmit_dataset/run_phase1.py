@@ -43,7 +43,7 @@ def parse_args():
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
     p.add_argument('--max_num_atoms', type=int, default=120, help='Maximum number of atoms in a molecule.')
-    p.add_argument('--chunk_offload_threshold', type=int, default=100, help='Threshold for offloading chunks to disk, in MB.')
+    p.add_argument('--chunk_offload_threshold', type=int, default=2000, help='Threshold for offloading chunks to disk, in MB.')
     p.add_argument('--register_write_interval', type=int, default=10, help='Interval for recording processed chunks.')
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
@@ -172,6 +172,10 @@ def error_and_update(error, pbar, error_counter):
     pbar.set_postfix({'errors': error_counter[0]})
     # Advance the progress bar, since this job is considered done.
     pbar.update(1)
+
+    # write the traceback to a file named 'error_log.txt'
+    with open('error_log.txt', 'a') as f:
+        traceback.print_exception(type(error), error, error.__traceback__, file=f)
 
 
 def run_parallel(n_cpus: int, spoof_db: bool, batch_iter: DBCrawler, 
