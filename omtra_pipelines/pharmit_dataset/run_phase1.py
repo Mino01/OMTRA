@@ -43,6 +43,7 @@ def parse_args():
     p.add_argument('--counterions', type=list, default=['Na', 'Ca', 'K', 'Mg', 'Al', 'Zn'])
     p.add_argument('--databases', type=list, default=["CHEMBL", "ChemDiv", "CSC", "Z", "CSF", "MCULE","MolPort", "NSC", "PubChem", "MCULE-ULTIMATE","LN", "LNL", "ZINC"])
     p.add_argument('--max_num_atoms', type=int, default=120, help='Maximum number of atoms in a molecule.')
+    p.add_argument('--min_num_atoms', type=int, default=4, help='Minimum number of atoms in a molecule.')
     p.add_argument('--chunk_offload_threshold', type=int, default=2000, help='Threshold for offloading chunks to disk, in MB.')
     p.add_argument('--register_write_interval', type=int, default=10, help='Interval for recording processed chunks.')
 
@@ -52,7 +53,7 @@ def parse_args():
     args = p.parse_args()
     return args
 
-def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num_atoms):
+def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num_atoms, min_num_atoms):
     global name_finder
     mol_tensorizer = MoleculeTensorizer(atom_map=atom_type_map)
 
@@ -98,7 +99,8 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # filter molecules with too many atoms
     too_big_idxs = []
     for i, mol in enumerate(mols):
-        if mol.GetNumAtoms() > max_num_atoms:
+        num_atoms = mol.GetNumAtoms()
+        if num_atoms > max_num_atoms or num_atoms < min_num_atoms:
             too_big_idxs.append(i)
     too_big_idxs = set(too_big_idxs)
     if len(too_big_idxs) > 0:
@@ -266,7 +268,7 @@ if __name__ == '__main__':
                            max_num_queries=args.n_chunks,
                            spoof_db=spoof_db)
     
-    process_args = (atom_type_map, ph_type_idx, database_list, args.max_num_atoms)
+    process_args = (atom_type_map, ph_type_idx, database_list, args.max_num_atoms, args.min_num_atoms)
 
     start_time = time.time()
 

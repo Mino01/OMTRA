@@ -23,6 +23,7 @@ from collections import defaultdict
 
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra.utils.graph import build_lookup_table
+from omtra.utils.misc import bad_mol_reporter
 from omtra.data.pharmit_pharmacophores import get_lig_only_pharmacophore
 from omtra.data.pharmacophores import get_pharmacophores
 from tempfile import TemporaryDirectory
@@ -297,14 +298,8 @@ def get_pharmacophore_data(mols):
             x_pharm, a_pharm, v_pharm, _ = get_pharmacophores(mol)
         except Exception as e:
             # TODO: remove this behavior, just for debugging
-            uuid = str(uuid.uuid4())[:4]
-            bad_mols_dir = Path("./bad_mols/")
-            bad_mols_dir.mkdir(exist_ok=True)
-            error_filepath = bad_mols_dir / f"error_{uuid}.txt"
-            with open(error_filepath, 'w') as error_file:
-                traceback.print_exc(file=error_file)
-            Chem.MolToMolFile(mol, str(bad_mols_dir / f"mol_{uuid}.sdf"), kekulize=False)
-            raise e
+            bad_mol_reporter(mol)
+            x_pharm, a_pharm, v_pharm = None, None, None
         if x_pharm is None:
             failed_pharm_idxs.append(idx)
             continue

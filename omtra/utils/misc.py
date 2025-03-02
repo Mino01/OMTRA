@@ -1,5 +1,9 @@
 import os
 from collections import defaultdict
+from rdkit import Chem
+import traceback
+import uuid
+from pathlib import Path
 
 class classproperty:
     def __init__(self, func):
@@ -22,3 +26,12 @@ def combine_tcv_counts(tcv_counts_list) -> defaultdict:
         for tcv, count in tcv_counts.items():
             combined_tcv_counts[tcv] += count
     return combined_tcv_counts
+
+def bad_mol_reporter(mol):
+    uuid_str = str(uuid.uuid4())[:4]
+    bad_mols_dir = Path("./bad_mols/")
+    bad_mols_dir.mkdir(exist_ok=True)
+    error_filepath = bad_mols_dir / f"error_{uuid_str}.txt"
+    with open(error_filepath, 'w') as error_file:
+        traceback.print_exc(file=error_file)
+    Chem.MolToMolFile(mol, str(bad_mols_dir / f"mol_{uuid_str}.sdf"), kekulize=False)

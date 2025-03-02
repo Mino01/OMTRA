@@ -100,6 +100,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         except KeyError:
             print(f"Atom {atom.GetSymbol()} not in atom map", flush=True)
             return MolXACE(failure_mode="atom map")
+
         atom_charges[i] = atom.GetFormalCharge()
 
     # get one-hot encoded bonds (only existing bonds) using the upper-triangular portion of the adjacency matrix
@@ -115,6 +116,11 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
 
     # compute valencies and unique valencies information
     valencies = np.sum(adj, axis=1)
+
+    # check for trivalent oxygen
+    if np.any((atom_types == atom_map_dict["O"]) & (valencies == 3)):
+        return MolXACE(failure_mode="trivalent oxygen")
+
     tcv = np.stack([atom_types, atom_charges, valencies], axis=1).astype(np.int8)
     unique_valencies, counts = np.unique(tcv, axis=0, return_counts=True)
     tcv_counts = {}
