@@ -232,7 +232,7 @@ if __name__ == '__main__':
     # write relevant distribution info
     # currently this includes the distribution p(n_atoms, n_pharms)
     # as well as p(atom_type, atom_charge, valency), also referred to as p_tcv
-    hist_file = zarr_dir / f'{store_path.stem}_n_nodes_dist.npz'
+    hist_file = zarr_dir / f'{store_path.stem}_dists.npz'
     np.savez(hist_file, 
              **chunk_info_manager.n_nodes_dist_info, 
              **chunk_info_manager.valency_dist_info)
