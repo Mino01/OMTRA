@@ -275,7 +275,7 @@ class StructureProcessor:
         keys = list(ligand_mols.keys())
         mols = list(ligand_mols.values())
 
-        (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
+        (xace_mols, failed_idxs, failure_counts, unique_valencies) = (
             self.ligand_tensorizer.featurize_molecules(mols)
         )
         annotation = system.system
@@ -310,14 +310,15 @@ class StructureProcessor:
                             is_covalent = True
                             linkages = inferred_linkages
 
+
             ligands_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 ccd=ccd,
-                coords=np.array(positions[i], dtype=np.float32),
-                atom_types=atom_types[i],
-                atom_charges=atom_charges[i],
-                bond_types=bond_types[i],
-                bond_indices=bond_idxs[i],
+                coords=np.array(xace_mols[i].positions, dtype=np.float32),
+                atom_types=xace_mols[i].atom_types,
+                atom_charges=xace_mols[i].atom_charges,
+                bond_types=xace_mols[i].bond_types,
+                bond_indices=xace_mols[i].bond_idxs,
                 is_covalent=is_covalent,
                 linkages=linkages,
             )
@@ -330,7 +331,7 @@ class StructureProcessor:
         keys = list(npnde_mols.keys())
         mols = list(npnde_mols.values())
 
-        (positions, atom_types, atom_charges, bond_types, bond_idxs, _, failed_idxs) = (
+        (xace_mols, failed_idxs, failure_counts, unique_valencies) = (
             self.npnde_tensorizer.featurize_molecules(mols)
         )
 
@@ -369,11 +370,11 @@ class StructureProcessor:
             npnde_data[key] = LigandData(
                 sdf=str(raw_sdf),
                 ccd=ccd,
-                coords=np.array(positions[i], dtype=np.float32),
-                atom_types=atom_types[i],
-                atom_charges=atom_charges[i],
-                bond_types=bond_types[i],
-                bond_indices=bond_idxs[i],
+                coords=np.array(xace_mols[i].positions, dtype=np.float32),
+                atom_types=xace_mols[i].atom_types,
+                atom_charges=xace_mols[i].atom_charges,
+                bond_types=xace_mols[i].bond_types,
+                bond_indices=xace_mols[i].bond_idxs,
                 is_covalent=is_covalent,
                 linkages=linkages,
             )
