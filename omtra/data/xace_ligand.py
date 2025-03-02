@@ -119,7 +119,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
     # compute valencies and unique valencies information
     # Note: torch simulation of np.sum; here we use numpy first then convert to torch
     valencies = np.sum(adj, axis=1)
-    tcv = np.stack([atom_types, atom_charges, valencies], axis=1)
+    tcv = np.stack([atom_types, atom_charges, valencies], axis=1).astype(np.int8)
     unique_valencies = np.unique(tcv, axis=0)
 
     return MolXACE(

@@ -37,7 +37,7 @@ class ChunkInfoManager():
                 break
 
         self.n_nodes_dist_info = self.compute_num_node_dists(atom_counts, pharm_counts)
-        self.valency_arr = self.build_valency_table(unique_valencies, atom_map)
+        self.valency_table = self.build_valency_table(unique_valencies, atom_map)
 
         self.df = pd.DataFrame(cinfo_rows) # raw info data converted to dataframe
 
@@ -45,11 +45,11 @@ class ChunkInfoManager():
 
         self.df = self.compute_write_boundaries(self.df)
 
-    def build_valency_table(unique_valencies: List[np.ndarray], atom_map) -> dict:
+    def build_valency_table(self, unique_valencies: List[np.ndarray], atom_map) -> dict:
 
         valency_arr = np.unique(np.concatenate(unique_valencies), axis=0)
 
-        atom_idx_to_symbol = {i: atom for atom, i in atom_map.items()}
+        atom_idx_to_symbol = {i: atom for i, atom in enumerate(atom_map)}
 
         valency_dict = {}
         for tcv in valency_arr:
