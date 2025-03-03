@@ -98,7 +98,7 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         try:
             atom_types[i] = atom_map_dict[atom.GetSymbol()]
         except KeyError:
-            print(f"Atom {atom.GetSymbol()} not in atom map", flush=True)
+            # print(f"Atom {atom.GetSymbol()} not in atom map", flush=True)
             return MolXACE(failure_mode="atom map")
 
         atom_charges[i] = atom.GetFormalCharge()
