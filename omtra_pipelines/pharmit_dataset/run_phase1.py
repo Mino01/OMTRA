@@ -108,35 +108,28 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
         failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[list(too_big_idxs)] = True
         databases = databases[~failed_mask]
-
-    # Get pharmacophore data
-    # TODO: x_pharm contains types, and a_pharm contains positions
-    # TODO: v_pharm contains variable number of vectors per center, 
-    # TODO: and defaults to 1 vector for pharm types with no directionality
-    # we want this to have a tensor for each molecule of shape (num_pharm_centers, num_vectors, 3)
-    # where num_vectors is the maximum number of vectors for any pharmacophore center
-    x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
-    # Remove ligands where pharmacophore generation failed
-    if len(failed_pharm_idxs) > 0 :
-        print("Failed to generate pharmacophores for,", len(failed_pharm_idxs), "molecules, removing")
-        x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_pharm_idxs]
-        a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_pharm_idxs]
-        mols = [mol for i, mol in enumerate(mols) if i not in failed_pharm_idxs]
-        failed_mask = np.zeros(databases.shape[0], dtype=bool)
-        failed_mask[failed_pharm_idxs] = True
-        databases = databases[~failed_mask]
         
     
     # Get XACE data
     xace_mols, failed_xace_idxs, failure_modes, tcv_counts = mol_tensorizer.featurize_molecules(mols)
+
+    if len(failure_modes) != 0:
+        print(failure_modes)
+
     # Remove molecules that failed to get xace data
     if len(failed_xace_idxs) > 0:
-        #print("XACE data for,", num_xace_failed, "molecules could not be found, removing")
-        x_pharm = [x for i, x in enumerate(x_pharm) if i not in failed_xace_idxs]
-        a_pharm = [a for i, a in enumerate(a_pharm) if i not in failed_xace_idxs]
-        v_pharm = [v for i, v in enumerate(v_pharm) if i not in failed_xace_idxs]
+        mols = [mol for i, mol in enumerate(mols) if i not in failed_xace_idxs]
         failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[failed_xace_idxs] = True
+        databases = databases[~failed_mask]
+
+    # Get pharmacophore data
+    x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
+    # Remove ligands where pharmacophore generation failed
+    if len(failed_pharm_idxs) > 0 :
+        xace_mols = [mol for i, mol in enumerate(xace_mols) if i not in failed_pharm_idxs]
+        failed_mask = np.zeros(databases.shape[0], dtype=bool)
+        failed_mask[failed_pharm_idxs] = True
         databases = databases[~failed_mask]
 
     # sanity check
