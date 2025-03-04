@@ -63,11 +63,16 @@ def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
     vectors = []
     for featAtoms, atomsLoc, featLoc in zip(atom_idxs, atom_positions, feature_positions):
         if feature == 'Aromatic':
-            vectors.append(GetAromaticFeatVects(atomsLoc, featLoc))
+            vec = GetAromaticFeatVects(atomsLoc, featLoc)
         elif feature == 'HydrogenDonor':
-            vectors.append(GetDonorFeatVects(featAtoms, atomsLoc, mol))
+            vec = GetDonorFeatVects(featAtoms, atomsLoc, mol)
         elif feature == 'HydrogenAcceptor':
-            vectors.append(GetAcceptorFeatVects(featAtoms, atomsLoc, mol))
+            vec = GetAcceptorFeatVects(featAtoms, atomsLoc, mol)
+        else:
+            vec = None
+
+        if vec:
+            vectors.append(vec)
         else:
             vectors.append([np.zeros(3)])
     return vectors
