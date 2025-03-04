@@ -1,13 +1,14 @@
-import os
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import biotite.structure as struc
 import biotite.structure.io.pdb as pdb
 import numpy as np
 from biotite.structure.io.pdbx import CIFFile, get_structure
+from omtra.data.pharmacophores import get_pharmacophores
 from omtra.data.xace_ligand import MoleculeTensorizer
 from omtra_pipelines.plinder_dataset.utils import _DEFAULT_DISTANCE_RANGE
 from plinder.core import PlinderSystem
@@ -42,11 +43,20 @@ class LigandData:
 
 
 @dataclass
+class PharmacophoreData:
+    coords: np.ndarray
+    types: np.ndarray
+    vectors: np.ndarray
+    interactions: np.ndarray
+
+
+@dataclass
 class SystemData:
     system_id: str
     ligand_id: str
     receptor: StructureData
     ligand: LigandData
+    pharmacophore: PharmacophoreData
     pocket: StructureData
     npndes: Optional[Dict[str, LigandData]] = None
     apo: Optional[StructureData] = None
@@ -271,9 +281,13 @@ class StructureProcessor:
 
     def process_ligands(
         self, system: PlinderSystem, ligand_mols: Dict[str, Chem.rdchem.Mol]
-    ) -> Dict[str, LigandData]:
+    ) -> Tuple[
+        Dict[str, LigandData], Dict[str, PharmacophoreData], Dict[str, Chem.rdchem.Mol]
+    ]:
         keys = list(ligand_mols.keys())
         mols = list(ligand_mols.values())
+
+        receptor_mol = Chem.MolFromPDBFile(system.receptor_pdb)
 
         (xace_mols, failed_idxs, failure_counts, tcv_counts) = (
             self.ligand_tensorizer.featurize_molecules(mols)
@@ -287,6 +301,7 @@ class StructureProcessor:
         ligand_keys = [key for i, key in enumerate(keys) if i not in failed_idxs]
 
         ligands_data = {}
+        pharmacophores_data = {}
         for i, key in enumerate(ligand_keys):
             raw_sdf = Path(system.ligand_sdfs[key]).relative_to(self.raw_data)
             instance, asym_id = key.split(".")
@@ -310,6 +325,10 @@ class StructureProcessor:
                             is_covalent = True
                             linkages = inferred_linkages
 
+            P, X, V, I = get_pharmacophores(mol=ligand_mols[key], rec=receptor_mol)
+            pharmacophores_data[key] = PharmacophoreData(
+                coords=P, types=X, vectors=V, interactions=I
+            )
 
             ligands_data[key] = LigandData(
                 sdf=str(raw_sdf),
@@ -323,7 +342,7 @@ class StructureProcessor:
                 linkages=linkages,
             )
 
-        return ligands_data, failed_mols
+        return (ligands_data, pharmacophores_data, failed_mols)
 
     def process_npndes(
         self, system: PlinderSystem, npnde_mols: Dict[str, Chem.rdchem.Mol]
@@ -544,6 +563,7 @@ class SystemProcessor:
         system_id: str,
         system: PlinderSystem,
         ligand_data: Dict[str, LigandData],
+        pharmacophore_data: Dict[str, PharmacophoreData],
         link_id: str,
         link_type: str,
         npnde_data: Optional[Dict[str, LigandData]] = None,
@@ -683,6 +703,7 @@ class SystemProcessor:
                 ligand_id=key,
                 receptor=receptor_data["holo"],
                 ligand=ligand,
+                pharmacophore=pharmacophore_data.get(key),
                 pocket=receptor_data["pockets"][key],
                 npndes=temp_npnde_data if temp_npnde_data else None,
                 apo=receptor_data[link_id] if link_type == "apo" else None,
@@ -696,6 +717,7 @@ class SystemProcessor:
         system_id: str,
         system: PlinderSystem,
         ligand_data: Dict[str, LigandData],
+        pharmacophore_data: Dict[str, PharmacophoreData],
         npnde_data: Optional[Dict[str, LigandData]] = None,
         chain_mapping: Optional[Dict[str, str]] = None,
         save_pockets: bool = False,
@@ -763,6 +785,7 @@ class SystemProcessor:
                 ligand_id=key,
                 receptor=receptor_data,
                 ligand=ligand,
+                pharmacophore=pharmacophore_data.get(key),
                 pocket=pockets_data[key],
                 npndes=temp_npnde_data if temp_npnde_data else None,
             )
@@ -781,8 +804,8 @@ class SystemProcessor:
         save_pockets: bool = False,
     ) -> Dict[str, Any]:
         # Process ligands
-        ligands_data, failed_mols = self.structure_processor.process_ligands(
-            system, ligand_mols
+        ligands_data, pharmacophores_data, failed_mols = (
+            self.structure_processor.process_ligands(system, ligand_mols)
         )
 
         if failed_mols:
@@ -796,6 +819,7 @@ class SystemProcessor:
                 system_id=system_id,
                 system=system,
                 ligand_data=ligands_data,
+                pharmacophore_data=pharmacophores_data,
                 npnde_data=npnde_data if npnde_mols else None,
                 chain_mapping=chain_mapping,
                 save_pockets=save_pockets,
@@ -817,6 +841,7 @@ class SystemProcessor:
                     system_id=system_id,
                     system=system,
                     ligand_data=ligands_data,
+                    pharmacophore_data=pharmacophores_data,
                     npnde_data=npnde_data if npnde_mols else None,
                     link_id=apo_id,
                     link_type="apo",
@@ -833,6 +858,7 @@ class SystemProcessor:
                     system_id=system_id,
                     system=system,
                     ligand_data=ligands_data,
+                    pharmacophore_data=pharmacophores_data,
                     npnde_data=npnde_data if npnde_mols else None,
                     link_id=pred_id,
                     link_type="pred",

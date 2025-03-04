@@ -1,8 +1,9 @@
 import argparse
 import logging
 from pathlib import Path
-from omtra_pipelines.plinder_dataset.plinder_zarr import PlinderZarrConverter
+
 from omtra_pipelines.plinder_dataset.plinder_pipeline import SystemProcessor
+from omtra_pipelines.plinder_dataset.plinder_zarr import PlinderZarrConverter
 
 LIGAND_MAP = ["C", "N", "O", "S", "F", "P", "Cl", "Br", "I"]
 NPNDE_MAP = [
