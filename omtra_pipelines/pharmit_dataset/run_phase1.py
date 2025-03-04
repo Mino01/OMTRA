@@ -190,7 +190,7 @@ def run_parallel(n_cpus: int, spoof_db: bool, batch_iter: DBCrawler,
     # Use a mutable container to track errors.
     error_counter = [0]
 
-    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
+    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(spoof_db,), maxtasksperchild=2) as pool:
         pending = []
         for chunk_idx, chunk_data in enumerate(batch_iter):
 
