@@ -11,11 +11,14 @@ from pathlib import Path
 import pandas as pd
 from typing import Any, Dict, List, Optional, Tuple
 from biotite.structure.io.pdbx import CIFFile, get_structure
-from omtra_pipelines.plinder_dataset.plinder_pipeline import StructureProcessor
-from omtra_pipelines.plinder_dataset.utils import LIGAND_MAP, NPNDE_MAP
+from omtra_pipelines.plinder_dataset.utils import LIGAND_MAP, NPNDE_MAP, setup_logger
 from plinder.core import PlinderSystem
 from rdkit import Chem
 from tqdm import tqdm
+
+logger = setup_logger(
+    __name__,
+)
 
 
 def check_atom_map(mol: Chem.rdchem.Mol, allowed_atoms: List[str] = LIGAND_MAP) -> bool:
@@ -26,6 +29,8 @@ def check_atom_map(mol: Chem.rdchem.Mol, allowed_atoms: List[str] = LIGAND_MAP) 
 
 
 def filter(system_id: str) -> (Dict[str, Chem.rdchem.Mol], Dict[str, Chem.rdchem.Mol]):
+    from omtra_pipelines.plinder_dataset.plinder_pipeline import StructureProcessor
+
     try:
         output_path = Path(
             f"/net/galaxy/home/koes/tjkatz/for_omtra/preprocessed_pkls/{system_id}.pkl"

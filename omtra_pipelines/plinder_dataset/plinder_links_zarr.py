@@ -2,6 +2,7 @@ import logging
 import multiprocessing as mp
 import queue
 import threading
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -10,6 +11,7 @@ import numpy as np
 import pandas as pd
 import zarr
 from numcodecs import VLenUTF8
+from omtra_pipelines.plinder_dataset.utils import setup_logger
 from omtra_pipelines.plinder_dataset.plinder_pipeline import (
     LigandData,
     StructureData,
@@ -19,7 +21,9 @@ from omtra_pipelines.plinder_dataset.plinder_pipeline import (
 )
 from tqdm import tqdm
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(
+    __name__,
+)
 
 
 class PlinderLinksZarrConverter:
@@ -28,7 +32,10 @@ class PlinderLinksZarrConverter:
         output_path: str,
         system_processor: SystemProcessor,
         struc_chunk_size: int = 235000,
-        lig_chunk_size: int = 2000,
+        lig_atom_chunk_size: int = 2000,
+        lig_bond_chunk_size: int = 2000,
+        pharmacophore_chunk_size: int = 2000,
+        pocket_chunk_size: int = 2000,
         category: str = None,
         num_workers: int = 1,
     ):
@@ -120,38 +127,46 @@ class PlinderLinksZarrConverter:
                 group.create_array(
                     "coords",
                     shape=(0, 3),
-                    chunks=(self.lig_chunk_size, 3),
+                    chunks=(self.lig_atom_chunk_size, 3),
                     dtype=np.float32,
                 )
                 group.create_array(
                     "atom_types",
                     shape=(0,),
-                    chunks=(self.lig_chunk_size,),
+                    chunks=(self.lig_atom_chunk_size,),
                     dtype=np.int32,
                 )
                 group.create_array(
                     "atom_charges",
                     shape=(0,),
-                    chunks=(self.lig_chunk_size,),
+                    chunks=(self.lig_atom_chunk_size,),
                     dtype=np.float32,
                 )
                 group.create_array(
                     "bond_types",
                     shape=(0,),
-                    chunks=(self.lig_chunk_size,),
+                    chunks=(self.lig_bond_chunk_size,),
                     dtype=np.int32,
                 )
                 group.create_array(
                     "bond_indices",
                     shape=(0, 2),
-                    chunks=(self.lig_chunk_size, 2),
+                    chunks=(self.lig_bond_chunk_size, 2),
                     dtype=np.int32,
                 )
 
-            # Initialize lookup tables
+            # Initialize lookup tables/attrs
             self.root.attrs["system_lookup"] = []
             self.root.attrs["npnde_lookup"] = []
-            self.root.attrs["chunk_sizes"] = []
+            self.root.attrs["chunk_sizes"] = [
+                {
+                    "struc": self.struc_chunk_size,
+                    "lig_atom": self.lig_atom_chunk_size,
+                    "lig_bond": self.lig_bond_chunk_size,
+                    "pocket": self.pocket_chunk_size,
+                    "pharmacophore": self.pharmacophore_chunk_size,
+                }
+            ]
             self.root.attrs["system_type_idxs"] = []
 
             self.system_lookup = self.root.attrs[
@@ -287,14 +302,12 @@ class PlinderLinksZarrConverter:
 
         if not system_data:
             return
-        link_type = None
+        link_type = system_data.link_type
         link_cif = None
-        if system_data.apo:
-            link_type = "apo"
-            link_cif = system_data.apo.cif
-        elif system_data.pred:
-            link_type = "pred"
-            link_cif = system_data.pred.cif
+        if link_type == "apo":
+            link_cif = system_data.link.cif
+        elif link_type == "pred":
+            link_cif = system_data.link.cif
         else:
             return
 
@@ -322,6 +335,7 @@ class PlinderLinksZarrConverter:
             "pharm_end": None,
             "npnde_idxs": None,
             "link_type": link_type,
+            "link_id": system_data.link_id,
             "link_start": None,
             "link_end": None,
             "link_cif": link_cif,
@@ -338,7 +352,7 @@ class PlinderLinksZarrConverter:
         system_entry["lig_bond_start"] = lig_bond_start
         system_entry["lig_bond_end"] = lig_bond_end
         system_entry["linkages"] = system_data.ligand.linkages
-        system_entry["ccd"] = system_data.ccd
+        system_entry["ccd"] = system_data.ligand.ccd
 
         # Process corresponding pocket
         pocket_start, pocket_end = self._append_structure_data(
@@ -378,27 +392,39 @@ class PlinderLinksZarrConverter:
                         "sdf": npnde_data.sdf,
                     }
                 )
+                self.root.attrs["npnde_lookup"] = self.npnde_lookup
             system_entry["npnde_idxs"] = npnde_idxs
 
         # Process apo structure
         if link_type == "apo":
-            apo_start, apo_end = self._append_structure_data(self.apo, system_data.apo)
+            apo_start, apo_end = self._append_structure_data(self.apo, system_data.link)
             system_entry["link_start"] = apo_start
             system_entry["link_end"] = apo_end
 
         # Process pred structure
         if link_type == "pred":
             pred_start, pred_end = self._append_structure_data(
-                self.pred, system_data.pred
+                self.pred, system_data.link
             )
             system_entry["link_start"] = pred_start
             system_entry["link_end"] = pred_end
 
+        curr_num = len(self.root.attrs["system_lookup"])
+        logger.info(
+            f"Wrote system {curr_num + 1}: {system_data.system_id} ligand {system_data.ligand_id} link {system_data.link_id} to zarr store"
+        )
         self.system_lookup.append(system_entry)
+        self.root.attrs["system_lookup"] = self.system_lookup
 
-    def process_dataset(self, system_ids: List[str]):
-        """Process list of systems"""
-        start = len(self.receptor_lookup)
+    def process_dataset(self, system_ids: List[str], max_pending=None):
+        if max_pending is None:
+            max_pending = self.num_workers * 2
+
+        start = len(self.system_lookup)
+        logger.info(
+            f"Processing {len(system_ids)} systems with {self.num_workers} workers"
+        )
+
         with mp.Manager() as manager:
             lock = manager.Lock()
             result_queue = manager.Queue()
@@ -409,17 +435,16 @@ class PlinderLinksZarrConverter:
                         result = result_queue.get(timeout=1)
                         if result is None:
                             break
-                        apo = result.get("apo")
-                        pred = result.get("pred")
 
-                        if apo:
-                            for system in apo:
-                                with lock:
-                                    self._write_system(system)
-                        if pred:
-                            for system in pred:
-                                with lock:
-                                    self._write_system(system)
+                        with lock:
+                            if result.get("apo"):
+                                for apo_id, system_list in result["apo"].items():
+                                    for system in system_list:
+                                        self._write_system(system)
+                            if result.get("pred"):
+                                for pred_id, system_list in result["pred"].items():
+                                    for system in system_list:
+                                        self._write_system(system)
 
                     except queue.Empty:
                         continue
@@ -427,23 +452,49 @@ class PlinderLinksZarrConverter:
             writer_thread = threading.Thread(target=_write_results_worker)
             writer_thread.start()
 
-            with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
-                futures = []
+            pbar = tqdm(
+                total=len(system_ids), desc="Processing systems", unit="systems"
+            )
+            successful_count = [0]
+            failed_count = [0]
+
+            def process_callback(result):
+                if result:
+                    result_queue.put(result)
+                    successful_count[0] += 1
+                else:
+                    failed_count[0] += 1
+                pbar.set_postfix(
+                    {"success": successful_count[0], "failed": failed_count[0]}
+                )
+                pbar.update(1)
+
+            with mp.Pool(processes=self.num_workers) as pool:
+                pending_jobs = []
+
                 for sid in system_ids:
-                    futures.append(executor.submit(self._process_system, sid))
+                    while len(pending_jobs) >= max_pending:
+                        pending_jobs = [job for job in pending_jobs if not job.ready()]
+                        if len(pending_jobs) >= max_pending:
+                            time.sleep(0.1)
 
-                for future in tqdm(futures, desc="Processing systems"):
-                    try:
-                        result = future.result()
-                        if result:
-                            result_queue.put(result)
-                    except Exception as e:
-                        logging.exception(f"Error in future: {e}")
-                        continue
+                    job = pool.apply_async(
+                        self._process_system, args=(sid,), callback=process_callback
+                    )
+                    pending_jobs.append(job)
 
-            result_queue.put(None)
-            writer_thread.join()
+                for job in pending_jobs:
+                    job.wait()
 
-            end = len(self.receptor_lookup)
+                result_queue.put(None)
+                writer_thread.join()
+
+                pbar.close()
+
+            end = len(self.system_lookup)
+            logger.info(
+                f"Processing complete. Success: {successful_count[0]}, Failed: {failed_count[0]}"
+            )
+
             if self.category:
-                self.root.attrs["system_type_idxs"].append((category, start, end))
+                self.root.attrs["system_type_idxs"].append((self.category, start, end))
