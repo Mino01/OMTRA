@@ -31,7 +31,6 @@ def parse_args():
     # temporary default path for development
     # don't hard-code a path here. just make a symbolic link to my pharmit_small directory in the same place in your repo,
     # or run the code with --db_dir=/path/to/pharmit_small
-    p.add_argument('--db_dir', type=Path, default='./pharmit_small/')
     p.add_argument('--spoof_db', action='store_true', help='Spoof the database connection, for offline development')
 
     
@@ -54,8 +53,13 @@ def parse_args():
 
     p.add_argument('--n_cpus', type=int, default=2, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--n_chunks', type=int, default=None, help='Number of to process. If None, process all. This is only for testing purposes.')
+    p.add_argument('--dev', action='store_true', help='Run in development mode.')
 
     args = p.parse_args()
+
+    if args.dev:
+        args.output_dir = args.output_dir.parent / f'dev_{args.output_dir.name}'
+
     return args
 
 def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num_atoms, min_num_atoms):
@@ -131,7 +135,8 @@ def process_batch(chunk_data, atom_type_map, ph_type_idx, database_list, max_num
     # Get pharmacophore data
     x_pharm, a_pharm, v_pharm, failed_pharm_idxs = get_pharmacophore_data(mols)
     # Remove ligands where pharmacophore generation failed
-    if len(failed_pharm_idxs) > 0 :
+    if len(failed_pharm_idxs) > 0:
+        print(f'pharmacophore generation failed for {len(failed_pharm_idxs)} ligands', flush=True)
         xace_mols = [mol for i, mol in enumerate(xace_mols) if i not in failed_pharm_idxs]
         failed_mask = np.zeros(databases.shape[0], dtype=bool)
         failed_mask[failed_pharm_idxs] = True
@@ -190,7 +195,7 @@ def run_parallel(n_cpus: int, spoof_db: bool, batch_iter: DBCrawler,
     # Use a mutable container to track errors.
     error_counter = [0]
 
-    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(spoof_db,)) as pool:
+    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(spoof_db,), maxtasksperchild=2) as pool:
         pending = []
         for chunk_idx, chunk_data in enumerate(batch_iter):
 
@@ -259,7 +264,8 @@ if __name__ == '__main__':
     chunk_saver = ChunkSaver(
         output_dir=args.output_dir,
         register_write_interval=args.register_write_interval,
-        chunk_offload_threshold_mb=args.chunk_offload_threshold
+        chunk_offload_threshold_mb=args.chunk_offload_threshold,
+        dev_mode=args.dev
     )
 
     db_crawler = DBCrawler(query_size=args.batch_size, 

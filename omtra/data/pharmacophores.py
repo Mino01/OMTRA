@@ -1,7 +1,7 @@
 import numpy as np
 import rdkit.Chem as Chem
 from scipy.spatial.distance import cdist
-from omtra.data.pharmvec import GetDonorFeatVects, GetAcceptorFeatVects, GetAromaticFeatVects
+from omtra.data.pharmvec import GetDonorFeatVects, GetAcceptorFeatVects, GetAromaticFeatVects, GetHalogenFeatVects
 from omtra.constants import ph_idx_to_type, ph_type_to_idx
 
 smarts_patterns = {
@@ -16,31 +16,39 @@ smarts_patterns = {
         "[#7!H0&!$(N-[SX4](=O)(=O)[CX4](F)(F)F)]", "[#8!H0&!$([OH][C,S,P]=O)]", "[#16!H0]"
     ],
     'Hydrophobic': [
-        "a1aaaaa1", "a1aaaa1", 
-        "[$([CH3X4,CH2X3,CH1X2,F,Cl,Br,I])&!$(**[CH3X4,CH2X3,CH1X2,F,Cl,Br,I])]",
-        "[$(*([CH3X4,CH2X3,CH1X2,F,Cl,Br,I])[CH3X4,CH2X3,CH1X2,F,Cl,Br,I])&!$(*([CH3X4,CH2X3,CH1X2,F,Cl,Br,I])([CH3X4,CH2X3,CH1X2,F,Cl,Br,I])[CH3X4,CH2X3,CH1X2,F,Cl,Br,I])]([CH3X4,CH2X3,CH1X2,F,Cl,Br,I])[CH3X4,CH2X3,CH1X2,F,Cl,Br,I]",
-        "[CH2X4,CH1X3,CH0X2]~[CH3X4,CH2X3,CH1X2,F,Cl,Br,I]",
-        "[$([CH2X4,CH1X3,CH0X2]~[$([!#1]);!$([CH2X4,CH1X3,CH0X2])])]~[CH2X4,CH1X3,CH0X2]~[CH2X4,CH1X3,CH0X2]",
-        "[$([S]~[#6])&!$(S~[!#6])]"
+    "a1aaaaa1", "a1aaaa1", 
+    "[$([CH3X4,CH2X3,CH1X2])&!$(**[CH3X4,CH2X3,CH1X2])]",
+    "[$(*([CH3X4,CH2X3,CH1X2])[CH3X4,CH2X3,CH1X2])&!$(*([CH3X4,CH2X3,CH1X2])([CH3X4,CH2X3,CH1X2])[CH3X4,CH2X3,CH1X2])]([CH3X4,CH2X3,CH1X2])[CH3X4,CH2X3,CH1X2]",
+    "[CH2X4,CH1X3,CH0X2]~[CH3X4,CH2X3,CH1X2]",
+    "[$([CH2X4,CH1X3,CH0X2]~[$([!#1]);!$([CH2X4,CH1X3,CH0X2])])]~[CH2X4,CH1X3,CH0X2]~[CH2X4,CH1X3,CH0X2]",
+    "[$([S]~[#6])&!$(S~[!#6])]"
+    ],
+    'Halogen': [
+        "[F;$(F-[#6]);!$(FC[F,Cl,Br,I])]",
+        "[Cl;$(Cl-[#6]);!$(FC[F,Cl,Br,I])]",
+        "[Br;$(Br-[#6]);!$(FC[F,Cl,Br,I])]",
+        "[I;$(I-[#6]);!$(FC[F,Cl,Br,I])]"
     ]
 }
 
 matching_types = {
-    'Aromatic': ['Aromatic', 'PositiveIon'],
+    'Aromatic': ['Aromatic', 'PositiveIon',],
     'HydrogenDonor': ['HydrogenAcceptor'],
-    'HydrogenAcceptor': ['HydrogenDonor'],
+    'HydrogenAcceptor': ['HydrogenDonor', 'Halogen'],
     'PositiveIon': ['NegativeIon', 'Aromatic'],
     'NegativeIon': ['PositiveIon'],
-    'Hydrophobic': ['Hydrophobic']
+    'Hydrophobic': ['Hydrophobic', 'Halogen'],
+    'Halogen': ['Hydrophobic', 'HydrogenAcceptor']
 }
 
 matching_distance = {
     "Aromatic": [7, 5],
     "HydrogenDonor": [4],
-    "HydrogenAcceptor": [4],
-    "PositiveIon": [5, 7],
+    "HydrogenAcceptor": [4, 4],
+    "PositiveIon": [5, 5],
     "NegativeIon": [5],
-    "Hydrophobic": [5]
+    "Hydrophobic": [5, 4,],
+    'Halogen': [5, 4]
 }
 
 def get_smarts_matches(rdmol, smarts_pattern):
@@ -63,11 +71,18 @@ def get_vectors(mol, feature, atom_idxs, atom_positions, feature_positions):
     vectors = []
     for featAtoms, atomsLoc, featLoc in zip(atom_idxs, atom_positions, feature_positions):
         if feature == 'Aromatic':
-            vectors.append(GetAromaticFeatVects(atomsLoc, featLoc))
+            vec = GetAromaticFeatVects(atomsLoc, featLoc)
         elif feature == 'HydrogenDonor':
-            vectors.append(GetDonorFeatVects(featAtoms, atomsLoc, mol))
+            vec = GetDonorFeatVects(featAtoms, atomsLoc, mol)
         elif feature == 'HydrogenAcceptor':
-            vectors.append(GetAcceptorFeatVects(featAtoms, atomsLoc, mol))
+            vec = GetAcceptorFeatVects(featAtoms, atomsLoc, mol)
+        elif feature == 'Halogen':
+            vec = GetHalogenFeatVects(featAtoms, atomsLoc, mol)
+        else:
+            vec = None
+
+        if vec:
+            vectors.append(vec)
         else:
             vectors.append([np.zeros(3)])
     return vectors
@@ -117,6 +132,9 @@ def get_pharmacophore_dict(ligand, receptor=None):
     """
     
     pharmacophores = {feature: {'P': [], 'V': [], 'I': []} for feature in smarts_patterns}
+    
+    ligand = Chem.AddHs(ligand, addCoords=True)
+    if receptor: receptor = Chem.AddHs(receptor, addCoords=True)
 
     for feature, patterns in smarts_patterns.items():
         all_ligand_positions = []
@@ -137,9 +155,13 @@ def get_pharmacophore_dict(ligand, receptor=None):
                         all_ligand_vectors[i] = updated_vectors[i]
 
                 pharmacophores[feature]['I'].extend(interaction)
+                receptor = Chem.RemoveHs(receptor)
             
             pharmacophores[feature]['P'].extend(all_ligand_positions)
             pharmacophores[feature]['V'].extend(all_ligand_vectors)            
+    
+    ligand = Chem.RemoveHs(ligand)
+    if receptor: receptor = Chem.RemoveHs(receptor)                
                 
     return pharmacophores
 

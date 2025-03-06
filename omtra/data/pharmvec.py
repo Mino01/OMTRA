@@ -1,7 +1,7 @@
 import numpy as np
 from rdkit.Chem.Features import FeatDirUtilsRD as FeatDirUtils
 
-def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False):
+def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = True):
     """Compute the direction vector for an aromatic feature."""
     
     v1 = atomsLoc[0] - featLoc
@@ -9,6 +9,9 @@ def GetAromaticFeatVects(atomsLoc, featLoc, return_both: bool = False):
 
     normal = np.cross(v1, v2)
     normal = normal / np.linalg.norm(normal)
+    
+    # if not np.all(np.isfinite(normal)):
+    #     return
     
     if return_both:
         normal2 = normal * -1
@@ -21,13 +24,18 @@ def GetDonorFeatVects(featAtoms, atomsLoc, rdmol):
     atom_idx = featAtoms[0]
     atom_coords = atomsLoc[0]
     vectors = []
+    conf = rdmol.GetConformer()
     
     for nbor in rdmol.GetAtomWithIdx(atom_idx).GetNeighbors():
         if nbor.GetAtomicNum() == 1:  # hydrogen atom
-            nbor_coords = np.array(rdmol.GetConformer().GetAtomPosition(nbor.GetIdx()))
+            nbor_coords = np.array(conf.GetAtomPosition(nbor.GetIdx()))
             vec = nbor_coords - atom_coords
             vec = vec / np.linalg.norm(vec)
             vectors.append(vec)
+            # if not np.all(np.isfinite(vec)):
+            #     continue
+            # else:
+            #     vectors.append(vec)
         
     return vectors
 
@@ -107,9 +115,10 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
         # take average direction of bonds and reverse it
         ave_bond = np.zeros(3)
         cnt = 0
+        conf = rdmol.GetConformer()
         
         for nbor in rdmol.GetAtomWithIdx(atom_idx).GetNeighbors():
-            nbor_coords = np.array(rdmol.GetConformer().GetAtomPosition(nbor.GetIdx()))
+            nbor_coords = np.array(conf.GetAtomPosition(nbor.GetIdx()))
             ave_bond += nbor_coords - atom_coords 
             cnt += 1
         
@@ -118,3 +127,40 @@ def GetAcceptorFeatVects(featAtoms, atomsLoc, rdmol):
             ave_bond *= -1
             ave_bond = ave_bond / np.linalg.norm(ave_bond)
             return [ave_bond]
+            # if np.all(np.isfinite(ave_bond)):   
+            #     return [ave_bond]
+
+def GetHalogenFeatVects(featAtoms, atomsLoc, rdmol):
+    """
+    Get the anchor positions and relative unit vectors of a halogen atom.
+    Assumes only one connection.
+
+    Arguments
+    ---------
+    conf : rdkit Mol object with a conformer.
+    featAtoms : list containing rdkit Atom object of atom attributed as an acceptor.
+    scale : float (default = 1.) length of direction vector.
+
+    Returns
+    -------
+    Tuple
+        list of anchor position(s) as rdkit Point3D or [None]
+        list of relative unit vector(s) as rdkit Point3D or [None]
+    """
+    assert len(featAtoms) == 1
+    atom_id = featAtoms[0]
+
+    atom = rdmol.GetAtomWithIdx(atom_id)
+    nbrs = atom.GetNeighbors()
+
+    cpt = atomsLoc[0]
+
+    # Just do opposite of single bond
+    heavy_nbr = nbrs[0]
+    conf = rdmol.GetConformer()
+    v1 = conf.GetAtomPosition(heavy_nbr.GetIdx())
+    v1 = np.array([v1.x, v1.y, v1.z])
+    v1 -= cpt
+    v1 *= -1.0
+    v1 = v1 / np.linalg.norm(v1)
+    return [v1]
