@@ -1,3 +1,6 @@
+# Volume overlap filtering adapted from Buttenschoen et al. 2023
+# https://pubs.rsc.org/en/content/articlehtml/2024/sc/d3sc04185a
+
 import argparse
 import logging
 import multiprocessing as mp
