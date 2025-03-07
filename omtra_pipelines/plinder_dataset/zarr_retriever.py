@@ -89,6 +89,7 @@ class PlinderZarrRetriever:
             atom_names=self.root["receptor"]["atom_names"][rec_start:rec_end].astype(
                 str
             ),
+            elements=self.root["receptor"]["elements"][rec_start:rec_end].astype(str),
             res_ids=self.root["receptor"]["res_ids"][rec_start:rec_end],
             res_names=self.root["receptor"]["res_names"][rec_start:rec_end].astype(str),
             chain_ids=self.root["receptor"]["chain_ids"][rec_start:rec_end].astype(str),
@@ -129,6 +130,9 @@ class PlinderZarrRetriever:
             atom_names=self.root["pocket"]["atom_names"][
                 pocket_start:pocket_end
             ].astype(str),
+            elements=self.root["pocket"]["elements"][pocket_start:pocket_end].astype(
+                str
+            ),
             res_ids=self.root["pocket"]["res_ids"][pocket_start:pocket_end],
             res_names=self.root["pocket"]["res_names"][pocket_start:pocket_end].astype(
                 str
@@ -149,6 +153,7 @@ class PlinderZarrRetriever:
                 atom_names=self.root["apo"]["atom_names"][link_start:link_end].astype(
                     str
                 ),
+                elements=self.root["apo"]["elements"][link_start:link_end].astype(str),
                 res_ids=self.root["apo"]["res_ids"][link_start:link_end],
                 res_names=self.root["apo"]["res_names"][link_start:link_end].astype(
                     str
@@ -164,6 +169,7 @@ class PlinderZarrRetriever:
                 atom_names=self.root["pred"]["atom_names"][link_start:link_end].astype(
                     str
                 ),
+                elements=self.root["pred"]["elements"][link_start:link_end].astype(str),
                 res_ids=self.root["pred"]["res_ids"][link_start:link_end],
                 res_names=self.root["pred"]["res_names"][link_start:link_end].astype(
                     str

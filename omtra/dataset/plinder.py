@@ -84,7 +84,8 @@ class PlinderDataset(ZarrDataset):
 
         receptor = StructureData(
             coords=self.slice_array("receptor/coords", rec_start, rec_end),
-            atom_names=self.slice_array("receptor/coords", rec_start, rec_end).astype(str),
+            atom_names=self.slice_array("receptor/atom_names", rec_start, rec_end).astype(str),
+            elements=self.slice_array("receptor/elements", rec_start, rec_end).astype(str),
             res_ids=self.slice_array("receptor/res_ids", rec_start, rec_end),
             res_names=self.slice_array("receptor/res_names", rec_start, rec_end).astype(str),
             chain_ids=self.slice_array("receptor/chain_ids", rec_start, rec_end).astype(str),
@@ -117,6 +118,7 @@ class PlinderDataset(ZarrDataset):
         pocket = StructureData(
             coords=self.slice_array("pocket/coords", pocket_start, pocket_end),
             atom_names=self.slice_array("pocket/atom_names", pocket_start, pocket_end).astype(str),
+            elements=self.slice_array("pocket/elements", pocket_start, pocket_end).astype(str),
             res_ids=self.slice_array("pocket/res_ids", pocket_start, pocket_end),
             res_names=self.slice_array("pocket/res_names", pocket_start, pocket_end).astype(
                 str
@@ -137,6 +139,9 @@ class PlinderDataset(ZarrDataset):
                 atom_names=self.slice_array("apo/atom_names", link_start, link_end).astype(
                     str
                 ),
+                elements=self.slice_array("apo/elements", link_start, link_end).astype(
+                    str
+                ),
                 res_ids=self.slice_array("apo/res_ids", link_start, link_end),
                 res_names=self.slice_array("apo/res_names", link_start, link_end).astype(
                     str
@@ -150,6 +155,9 @@ class PlinderDataset(ZarrDataset):
             pred = StructureData(
                 coords=self.slice_array("pred/coords", link_start, link_end),
                 atom_names=self.slice_array("pred/atom_names", link_start, link_end).astype(
+                    str
+                ),
+                elements=self.slice_array("pred/elements", link_start, link_end).astype(
                     str
                 ),
                 res_ids=self.slice_array("pred/res_ids", link_start, link_end),

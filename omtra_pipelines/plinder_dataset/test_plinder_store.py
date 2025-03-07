@@ -19,6 +19,9 @@ def check_receptor(system: SystemData, actual_system: SystemData):
     assert np.all(system.receptor.atom_names == actual_system.receptor.atom_names), (
         f"Receptor atom_names mismatch {system.system_id}"
     )
+    assert np.all(system.receptor.elements == actual_system.receptor.elements), (
+        f"Receptor elements mismatch {system.system_id}"
+    )
     assert np.all(system.receptor.res_ids == actual_system.receptor.res_ids), (
         f"Receptor res_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
@@ -43,6 +46,7 @@ def check_pocket(system: SystemData, actual_system: SystemData):
             system.pocket.res_ids[i],
             system.pocket.res_names[i],
             system.pocket.atom_names[i],
+            system.pocket.elements[i],
             system.pocket.chain_ids[i],
         )
         system_atoms[atom_id] = system.pocket.coords[i]
@@ -52,6 +56,7 @@ def check_pocket(system: SystemData, actual_system: SystemData):
             actual_system.pocket.res_ids[i],
             actual_system.pocket.res_names[i],
             actual_system.pocket.atom_names[i],
+            actual_system.pocket.elements[i],
             actual_system.pocket.chain_ids[i],
         )
         actual_system_atoms[atom_id] = actual_system.pocket.coords[i]
@@ -194,6 +199,9 @@ def check_link(system: SystemData, actual_system: SystemData):
     assert np.all(system.link.atom_names == actual_system.link.atom_names), (
         f"link atom names indices mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
+    assert np.all(system.link.elements == actual_system.link.elements), (
+        f"link elements indices mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
     assert np.all(system.link.res_ids == actual_system.link.res_ids), (
         f"link res ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
@@ -210,6 +218,9 @@ def check_link(system: SystemData, actual_system: SystemData):
     # check correspondence with receptor
     assert np.all(system.link.atom_names == system.receptor.atom_names), (
         f"Atom names mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+    assert np.all(system.link.elements == system.receptor.elements), (
+        f"Elements mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
     )
     assert np.all(system.link.res_ids == system.receptor.res_ids), (
         f"res ids mismatch between link + receptor {system.system_id} {system.ligand_id} {system.link_id}"
