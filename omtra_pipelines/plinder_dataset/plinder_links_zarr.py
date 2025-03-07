@@ -78,6 +78,13 @@ class PlinderLinksZarrConverter:
                     compressors=None,
                 )
                 group.create_array(
+                    "elements",
+                    shape=(0,),
+                    chunks=(chunk,),
+                    dtype=str,
+                    compressors=None,
+                )
+                group.create_array(
                     "res_ids", shape=(0,), chunks=(chunk,), dtype=np.int32
                 )
                 group.create_array(
@@ -213,6 +220,9 @@ class PlinderLinksZarrConverter:
 
         group["atom_names"].resize((new_len,))
         group["atom_names"][current_len:] = data.atom_names
+
+        group["elements"].resize((new_len,))
+        group["elements"][current_len:] = data.elements
 
         group["res_ids"].resize((new_len,))
         group["res_ids"][current_len:] = data.res_ids

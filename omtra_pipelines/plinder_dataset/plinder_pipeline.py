@@ -24,6 +24,7 @@ logger = setup_logger(
 class StructureData:
     coords: np.ndarray
     atom_names: np.ndarray
+    elements: np.ndarray
     res_ids: np.ndarray
     res_names: np.ndarray
     chain_ids: np.ndarray
@@ -125,6 +126,7 @@ class StructureProcessor:
             cif=str(raw_cif),
             coords=receptor.coord,
             atom_names=receptor.atom_name,
+            elements=receptor.element,
             res_ids=receptor.res_id,
             res_names=receptor.res_name,
             chain_ids=receptor.chain_id,
@@ -468,6 +470,7 @@ class StructureProcessor:
         return StructureData(
             coords=receptor.coord[pocket_indices],
             atom_names=receptor.atom_name[pocket_indices],
+            elements=receptor.element[pocket_indices],
             res_ids=receptor.res_id[pocket_indices],  # original residue ids
             res_names=receptor.res_name[pocket_indices],
             chain_ids=receptor.chain_id[pocket_indices],
