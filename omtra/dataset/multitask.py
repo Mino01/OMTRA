@@ -13,7 +13,8 @@ class MultitaskDataSet(torch.utils.data.Dataset):
 
     """A dataset capable of serving up samples from multiple zarr datasets."""
 
-    def __init__(self, split: str, tasks: List[dict], 
+    def __init__(self, split: str, 
+                 tasks: List[dict], 
                  single_dataset_configs: Dict[str, dict], 
                  dataset_task_coupling: dict,
                  graph_config: DictConfig):

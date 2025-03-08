@@ -28,4 +28,4 @@ symlink_dir: ./wandb_symlinks
 hydra:
   run:
     # Use a timestamp plus the unique job id to form the run directory.
-    dir: ./outputs/${now:%Y-%m-%d_%H-%M-%S}-${hydra.job.id}
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}-${hydra.job.id}

@@ -3,6 +3,7 @@ import os
 from typing import List
 import pytorch_lightning as pl
 from omegaconf import DictConfig, OmegaConf, open_dict
+from hydra.core.hydra_config import HydraConfig
 
 from omtra.dataset.data_module import MultiTaskDataModule
 from omtra.load.conf import merge_task_spec, instantiate_callbacks
@@ -47,19 +48,22 @@ def train(cfg: DictConfig):
     wandb_config = cfg.wandb
     if resume:
         # if we are resuming, we need to read the run_id from the resume_info.yaml file
-        resume_info_file = Path(cfg.hydra.run.dir) / 'resume_info.yaml'
+        run_dir = Path(cfg.og_run_dir)
+        resume_info_file = run_dir / 'resume_info.yaml'
         with open(resume_info_file, 'r') as f:
             resume_info = OmegaConf.load(f)
         run_id = resume_info.run_id
         wandb_config.resume = 'must'
     else:
+        run_dir = HydraConfig.get().runtime.output_dir
+        run_dir = Path(run_dir)
         # otherwise, we generate a new run_id
         run_id = wandb.util.generate_id()
         
 
     wandb_logger = WandbLogger(
         config=cfg,
-        save_dir=cfg.hydra.run.dir,  # ensures logs are stored with the Hydra output dir
+        save_dir=run_dir,  # ensures logs are stored with the Hydra output dir
         run_id=run_id,
         **wandb_config
     )
@@ -76,17 +80,21 @@ def train(cfg: DictConfig):
         resume_info["name"] = wandb_logger.experiment.name
 
         # write resume info as yaml file to run directory
-        resume_info_file = Path(cfg.hydra.run.dir) / "resume_info.yaml"
+        resume_info_file = run_dir / "resume_info.yaml"
         with open(resume_info_file, "w") as f:
             OmegaConf.save(resume_info, f)
 
         # create symlink in symlink_dir
         symlink_dir = Path(cfg.symlink_dir)
         symlink_path = symlink_dir / f"{wandb_logger.experiment.name}_{run_id}"
-        os.symlink(cfg.hydra.run.dir, symlink_path)
+        os.symlink(run_dir, symlink_path)
 
     # instantiate callbacks
-    callbacks: List[pl.Callback] = instantiate_callbacks(cfg.callbacks)
+    if resume:
+        override_dir = run_dir
+    else:
+        override_dir = None
+    callbacks: List[pl.Callback] = instantiate_callbacks(cfg.callbacks, override_dir=override_dir)
 
 
     trainer = pl.Trainer(
@@ -120,6 +128,7 @@ def main(cfg: DictConfig):
         original_cfg_path = run_dir / 'config.yaml'
         cfg = OmegaConf.load(original_cfg_path)
         cfg.ckpt_path = str(ckpt_path)
+        cfg.og_run_dir = str(run_dir)
     else:
         cfg = merge_task_spec(cfg)
 

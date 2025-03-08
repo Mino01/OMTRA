@@ -27,6 +27,8 @@ class MultiTaskSampler(Sampler):
         self.dataset_names = multi_dataset.dataset_names
         self.p_dataset_task = multi_dataset.p_dataset_task
 
+        self.batch_idx = 0
+
         if self.distributed:
             self.num_replicas = num_replicas if num_replicas is not None else torch.distributed.get_world_size()
             self.rank = rank if rank is not None else torch.distributed.get_rank()
@@ -75,6 +77,7 @@ class MultiTaskSampler(Sampler):
                     self.td_pair_to_chunk_tracker_id[(task_idx, dataset_idx)] = chunk_tracker_idx
 
             elif dataset_name == 'plinder':
+                raise NotImplementedError('logic here needs to modified; there are now separate datasets for plinder with/without apo structures')
                 # divide tasks into those that use the apo state and those that don't
                 # and create separate chunk trackers for each
                 tasks = [self.tasks[self.task_names[task_idx]] for task_idx in task_idxs]
@@ -137,3 +140,11 @@ class MultiTaskSampler(Sampler):
             global_idxs = [ (task_idx, dataset_idx, idx) for idx in batch_idxs ]
             
             yield global_idxs
+
+    def state_dict(self):
+        return {
+            'batch_idx': self.batch_idx,
+        }
+    
+    def load_state_dict(self, state_dict):
+        self.batch_idx = state_dict['batch_idx']

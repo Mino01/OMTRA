@@ -37,6 +37,17 @@ class MultiTaskDataModule(pl.LightningDataModule):
             self.train_dataset = self.load_dataset('train')
             self.val_dataset = self.load_dataset('val')
 
+            self.train_sampler = MultiTaskSampler(
+                self.train_dataset, 
+                self.edges_per_batch, 
+                distributed=self.distributed
+            )
+            self.val_sampler = MultiTaskSampler(
+                self.val_dataset, 
+                self.edges_per_batch, 
+                distributed=self.distributed
+            )
+
     def load_dataset(self, split: str):
         # TODO: tasks should just be absored into multitask_dataset_config
         return MultitaskDataSet(split, 
@@ -44,9 +55,8 @@ class MultiTaskDataModule(pl.LightningDataModule):
                              **self.dataset_config)
     
     def train_dataloader(self):
-        batch_sampler = MultiTaskSampler(self.train_dataset, self.edges_per_batch, distributed=self.distributed)
         dataloader = DataLoader(self.train_dataset, 
-                                batch_sampler=batch_sampler,
+                                batch_sampler=self.train_sampler,
                                 collate_fn=omtra_collate_fn, 
                                 worker_init_fn=worker_init_fn,
                                 num_workers=self.num_workers)
@@ -55,14 +65,25 @@ class MultiTaskDataModule(pl.LightningDataModule):
     
 
     def val_dataloader(self):
-        batch_sampler = MultiTaskSampler(self.val_dataset, self.edges_per_batch, distributed=self.distributed)
         dataloader = DataLoader(self.val_dataset, 
-                                batch_sampler=batch_sampler,
+                                batch_sampler=self.val_sampler,
                                 collate_fn=omtra_collate_fn, 
                                 worker_init_fn=worker_init_fn,
                                 num_workers=self.num_workers)
         return dataloader
-
+    
+    def state_dict(self):
+        # Save the state of the samplers as part of the datamodule state.
+        return {
+            'train_sampler_state': self.train_sampler.state_dict() if self.train_sampler else None,
+            'val_sampler_state': self.val_sampler.state_dict() if self.val_sampler else None
+        }
+    
+    def load_state_dict(self, state_dict):
+        if self.train_sampler and state_dict.get('train_sampler_state') is not None:
+            self.train_sampler.load_state_dict(state_dict['train_sampler_state'])
+        if self.val_sampler and state_dict.get('val_sampler_state') is not None:
+            self.val_sampler.load_state_dict(state_dict['val_sampler_state'])
 
 def omtra_collate_fn(batch):
     graphs, task_names, dataset_names = zip(*batch)

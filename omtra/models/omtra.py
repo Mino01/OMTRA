@@ -4,6 +4,7 @@ import dgl
 from typing import Dict, List
 from collections import defaultdict
 import wandb
+import itertools
 
 class OMTRA(pl.LightningModule):
 
@@ -19,9 +20,14 @@ class OMTRA(pl.LightningModule):
         # TODO: actually retrieve tasks and datasets for this dataset
         tasks = ['task_a', 'task_b']
         datasets = ['dataset_a', 'dataset_b']
-        for task in tasks:
-            for dataset in datasets:
-                previous_sample_count = wandb.run.summary.get(f'{task}_{dataset}_sample_count', 0)
+        self.sample_counts = defaultdict(int)
+        if self.global_rank == 0:
+            if wandb.run is None:
+                print('Warning: no wandb run found. Setting previous sample counts to 0.')
+            previous_sample_count = 0
+            for task, dataset in itertools.product(tasks, datasets):
+                if wandb.run is not None:
+                    previous_sample_count = wandb.run.summary.get(f'{task}_{dataset}_sample_count', 0)
                 self.sample_counts[(task, dataset)] = previous_sample_count
 
         # TODO: implement periodic inference / eval ... how to do this with multiple tasks?

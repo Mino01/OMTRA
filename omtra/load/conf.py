@@ -32,7 +32,7 @@ def merge_task_spec(cfg: DictConfig) -> DictConfig:
             cfg.task_group.datamodule.dataset_config.single_dataset_configs[ds_name] = ds_cfg
     return cfg
 
-def instantiate_callbacks(callbacks_cfg: DictConfig) -> List[Callback]:
+def instantiate_callbacks(callbacks_cfg: DictConfig, override_dir=None) -> List[Callback]:
     """Instantiates callbacks from config.
 
     :param callbacks_cfg: A DictConfig object containing callback configurations.
@@ -52,6 +52,11 @@ def instantiate_callbacks(callbacks_cfg: DictConfig) -> List[Callback]:
     for _, cb_conf in callbacks_cfg.items():
         if isinstance(cb_conf, DictConfig) and "_target_" in cb_conf:
             print(f"Instantiating callback <{cb_conf._target_}>")
+
+            # override checkpoint dir if specified
+            if override_dir is not None and 'CheckpointCallback' in cb_conf._target_:
+                cb_conf.dirpath = override_dir
+
             callbacks.append(hydra.utils.instantiate(cb_conf))
 
     return callbacks
