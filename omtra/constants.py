@@ -9,8 +9,8 @@ ph_idx_to_type = [    'Aromatic',
 
 ph_type_to_idx = { val:idx for idx,val in enumerate(ph_idx_to_type) }
 
-lig_atom_type_map: ["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"]
-npnde_atom_type_map: ["C","N","O","S","F", "P", "Cl","Br","I","Si","Pd",
+lig_atom_type_map = ["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"]
+npnde_atom_type_map = ["C","N","O","S","F", "P", "Cl","Br","I","Si","Pd",
     "Ca",
     "Sc",
     "Al",
