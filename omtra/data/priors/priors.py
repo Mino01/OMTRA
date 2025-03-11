@@ -4,18 +4,30 @@ import torch
 from torch.nn.functional import softmax, one_hot
 import dgl
 
-def gaussian(n: int, d: int, std: float = 1.0, simplex_center: bool = False):
+from omtra.data.priors.align import align_prior
+
+def gaussian(x1: torch.Tensor, std: float = 1.0, ot=False):
     """
     Generate a prior feature by sampling from a Gaussian distribution.
     """
-    p = torch.randn(n, d) * std
+
+    n, d = x1.shape
+
+    x0 = torch.randn(n, d) * std
     
-    if simplex_center:
-        p = p + 1/d
-    return p
+    if ot:
+        # move x0 to the same COM as x1
+        x0_mean = x0.mean(dim=0, keepdim=True)
+        x1_mean = x1.mean(dim=0, keepdim=True)
+        x0 += x1_mean - x0_mean
+
+        # align x0 to x1
+        x0 = align_prior(x0, x1, rigid_body=True, permutation=True)
+
+    return x0
 
 
-def centered_normal_prior(n: int, d: int, std: float = 4.0):
+def centered_normal_prior(x1: torch.Tensor, std: float = 1.0):
     """
     Generate a prior feature by sampling from a centered normal distribution.
     """
@@ -23,8 +35,9 @@ def centered_normal_prior(n: int, d: int, std: float = 4.0):
     prior_feat = prior_feat - prior_feat.mean(dim=0, keepdim=True)
     return prior_feat
 
-def centered_normal_prior_batched_graph(g: dgl.DGLGraph, node_batch_idx: torch.Tensor, std: float = 4.0):
-
+def centered_normal_prior_batched_graph(g: dgl.DGLGraph, node_batch_idx: torch.Tensor, std: float = 1.0):
+    raise NotImplementedError
+    # TODO: implement this for a heterogeneous graph
     n = g.num_nodes()
     prior_sample = torch.randn(n, 3, device=g.device)
     with g.local_scope():
