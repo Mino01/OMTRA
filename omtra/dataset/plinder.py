@@ -183,15 +183,20 @@ class PlinderDataset(ZarrDataset):
             link=apo if apo else pred,
         )
         return system
-
+    
+    def convert_system(system: SystemData) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        # TODO: implement 
+        pass
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class[task_name]
 
         system = self.get_system(index)
 
+        node_data, edge_idxs, edge_data = convert_system(system)
+
         # TODO: things!
-        g = build_complex_graph()
+        g = build_complex_graph(node_data, edge_idxs, edge_data)
 
         return g
     
