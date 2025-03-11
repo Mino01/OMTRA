@@ -188,7 +188,7 @@ class PlinderDataset(ZarrDataset):
 
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
-        task_class: Task = task_name_to_class[task_name]
+        task_class: Task = task_name_to_class(task_name)
 
         system = self.get_system(index)
 

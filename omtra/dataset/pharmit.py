@@ -41,7 +41,7 @@ class PharmitDataset(ZarrDataset):
 
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
-        task_class: Task = task_name_to_class[task_name]
+        task_class: Task = task_name_to_class(task_name)
 
         # check if this task includes pharmacophore data
         include_pharmacophore = 'pharmacophore' in task_class.modalities_present

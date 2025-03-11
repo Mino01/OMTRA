@@ -1,5 +1,3 @@
-import inspect
-import omtra.tasks.tasks as tasks
 from typing import Dict
 
 
@@ -12,13 +10,13 @@ def register_task(name: str):
     :param name: A unique name for the task.
     """
     def decorator(cls):
-        cls.registered_name = name  # Attach the key to the class.
+        cls.name = name  # Attach the key to the class.
         TASK_REGISTER[name] = cls
         return cls
     return decorator
 
 
-def task_name_to_class(name: str) -> tasks.Task:
+def task_name_to_class(name: str):
     """
     Get the task class associated with a given name.
     :param name: The name of the task.

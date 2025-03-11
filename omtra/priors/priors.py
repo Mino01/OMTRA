@@ -4,8 +4,11 @@ import torch
 from torch.nn.functional import softmax, one_hot
 import dgl
 
-from omtra.data.priors.align import align_prior
+from omtra.priors.register import register_train_prior, register_inference_prior
+from omtra.priors.align import align_prior
 
+@register_train_prior("gaussian")
+@register_inference_prior("gaussian")
 def gaussian(x1: torch.Tensor, std: float = 1.0, ot=False):
     """
     Generate a prior feature by sampling from a Gaussian distribution.
@@ -26,7 +29,7 @@ def gaussian(x1: torch.Tensor, std: float = 1.0, ot=False):
 
     return x0
 
-
+@register_train_prior("centered-normal")
 def centered_normal_prior(x1: torch.Tensor, std: float = 1.0):
     """
     Generate a prior feature by sampling from a centered normal distribution.
@@ -35,6 +38,8 @@ def centered_normal_prior(x1: torch.Tensor, std: float = 1.0):
     prior_feat = prior_feat - prior_feat.mean(dim=0, keepdim=True)
     return prior_feat
 
+
+@register_inference_prior("centered-normal")
 def centered_normal_prior_batched_graph(g: dgl.DGLGraph, node_batch_idx: torch.Tensor, std: float = 1.0):
     raise NotImplementedError
     # TODO: implement this for a heterogeneous graph
@@ -46,13 +51,13 @@ def centered_normal_prior_batched_graph(g: dgl.DGLGraph, node_batch_idx: torch.T
 
     return prior_sample
     
-
-def ctmc_masked_prior(n: int, d: int):
+@register_train_prior("masked")
+@register_inference_prior("masked")
+def ctmc_masked_prior(x1: torch.Tensor, n_categories: int):
     """
     Sample from a CTMC masked prior. All samples are assigned the mask token at t=0.
     """
-    p = torch.full((n,), fill_value=d)
-    p = one_hot(p, num_classes=d+1).float()
+    p = torch.ones_like(x1)*n_categories
     return p
 
 
