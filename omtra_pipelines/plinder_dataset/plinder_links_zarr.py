@@ -19,6 +19,7 @@ from omtra_pipelines.plinder_dataset.plinder_pipeline import (
     SystemData,
     SystemProcessor,
 )
+from omtra.constants import lig_atom_type_map, npnde_atom_type_map
 from tqdm import tqdm
 
 logger = setup_logger(
@@ -30,7 +31,6 @@ class PlinderLinksZarrConverter:
     def __init__(
         self,
         output_path: str,
-        system_processor: SystemProcessor,
         struc_chunk_size: int = 235000,
         lig_atom_chunk_size: int = 2000,
         lig_bond_chunk_size: int = 2000,
@@ -40,7 +40,6 @@ class PlinderLinksZarrConverter:
         num_workers: int = 1,
     ):
         self.output_path = Path(output_path)
-        self.system_processor = system_processor
         self.struc_chunk_size = struc_chunk_size
         self.lig_atom_chunk_size = lig_atom_chunk_size
         self.lig_bond_chunk_size = lig_bond_chunk_size
@@ -96,6 +95,32 @@ class PlinderLinksZarrConverter:
                 )
                 group.create_array(
                     "chain_ids",
+                    shape=(0,),
+                    chunks=(chunk,),
+                    dtype=str,
+                    compressors=None,
+                )
+                group.create_array(
+                    "backbone_coords",
+                    shape=(0, 3, 3),
+                    chunks=(chunk, 3, 3),
+                    dtype=np.float32,
+                )
+                group.create_array(
+                    "backbone_res_ids",
+                    shape=(0,),
+                    chunks=(chunk,),
+                    dtype=np.int32,
+                )
+                group.create_array(
+                    "backbone_res_names",
+                    shape=(0,),
+                    chunks=(chunk,),
+                    dtype=str,
+                    compressors=None,
+                )
+                group.create_array(
+                    "backbone_chain_ids",
                     shape=(0,),
                     chunks=(chunk,),
                     dtype=str,
@@ -199,7 +224,7 @@ class PlinderLinksZarrConverter:
 
     def _append_structure_data(
         self, group: zarr.Group, data: StructureData
-    ) -> Tuple[int, int]:
+    ) -> Tuple[int, int, int, int]:
         """
         Append structure data to arrays and return start and end indices.
 
@@ -233,7 +258,23 @@ class PlinderLinksZarrConverter:
         group["chain_ids"].resize((new_len,))
         group["chain_ids"][current_len:] = data.chain_ids
 
-        return current_len, new_len
+        bb_current_len = group["backbone_coords"].shape[0]
+        bb_num_res = len(data.backbone.coords)
+        bb_new_len = bb_current_len + bb_num_res
+
+        group["backbone_coords"].resize((bb_new_len, 3, 3))
+        group["backbone_coords"][bb_current_len:] = data.backbone.coords
+
+        group["backbone_res_ids"].resize((bb_new_len,))
+        group["backbone_res_ids"][bb_current_len:] = data.backbone.res_ids
+
+        group["backbone_res_names"].resize((bb_new_len,))
+        group["backbone_res_names"][bb_current_len:] = data.backbone.res_names
+
+        group["backbone_chain_ids"].resize((bb_new_len,))
+        group["backbone_chain_ids"][bb_current_len:] = data.backbone.chain_ids
+
+        return current_len, new_len, bb_current_len, bb_new_len
 
     def _append_pharmacophore_data(
         self, group: zarr.Group, data: PharmacophoreData
@@ -302,7 +343,10 @@ class PlinderLinksZarrConverter:
 
     def _process_system(self, system_id: str):
         try:
-            return self.system_processor.process_system(system_id)
+            system_processor = SystemProcessor(
+                system_id=system_id, link_type=self.category
+            )
+            return system_processor.process_system()
         except Exception as e:
             logging.exception(f"Error processing system {system_id}: {e}")
             return None
@@ -323,8 +367,8 @@ class PlinderLinksZarrConverter:
 
         # Process holo structure
         system_idx = len(self.system_lookup)
-        receptor_start, receptor_end = self._append_structure_data(
-            self.receptor, system_data.receptor
+        receptor_start, receptor_end, backbone_start, backbone_end = (
+            self._append_structure_data(self.receptor, system_data.receptor)
         )
         # [{system_id, ligand_id, receptor_idx, ligand_idx, rec_start, rec_end, lig_atom_start, lig_atom_end, lig_bond_start, lig_bond_end, pharmacophore_idx, pharm_start, pharm_end, npnde_idxs, pocket_idx, pocket_start, pocket_end apo_idx, pred_idx, link_start, link_end, cif, sdf}]
         system_entry = {
@@ -333,6 +377,8 @@ class PlinderLinksZarrConverter:
             "system_idx": system_idx,
             "rec_start": receptor_start,
             "rec_end": receptor_end,
+            "backbone_start": backbone_start,
+            "backbone_end": backbone_end,
             "lig_atom_start": None,
             "lig_atom_end": None,
             "lig_bond_start": None,
@@ -341,6 +387,8 @@ class PlinderLinksZarrConverter:
             "ccd": None,
             "pocket_start": None,
             "pocket_end": None,
+            "pocket_bb_start": None,
+            "pocket_bb_end": None,
             "pharm_start": None,
             "pharm_end": None,
             "npnde_idxs": None,
@@ -348,6 +396,8 @@ class PlinderLinksZarrConverter:
             "link_id": system_data.link_id,
             "link_start": None,
             "link_end": None,
+            "link_bb_start": None,
+            "link_bb_end": None,
             "link_cif": link_cif,
             "lig_sdf": system_data.ligand.sdf,
             "rec_cif": system_data.receptor.cif,
@@ -365,11 +415,13 @@ class PlinderLinksZarrConverter:
         system_entry["ccd"] = system_data.ligand.ccd
 
         # Process corresponding pocket
-        pocket_start, pocket_end = self._append_structure_data(
-            self.pocket, system_data.pocket
+        pocket_start, pocket_end, pocket_bb_start, pocket_bb_end = (
+            self._append_structure_data(self.pocket, system_data.pocket)
         )
         system_entry["pocket_start"] = pocket_start
         system_entry["pocket_end"] = pocket_end
+        system_entry["pocket_bb_start"] = pocket_bb_start
+        system_entry["pocket_bb_end"] = pocket_bb_end
 
         pharm_start, pharm_end = self._append_pharmacophore_data(
             self.pharmacophore, system_data.pharmacophore
@@ -407,17 +459,23 @@ class PlinderLinksZarrConverter:
 
         # Process apo structure
         if link_type == "apo":
-            apo_start, apo_end = self._append_structure_data(self.apo, system_data.link)
+            apo_start, apo_end, apo_bb_start, apo_bb_end = self._append_structure_data(
+                self.apo, system_data.link
+            )
             system_entry["link_start"] = apo_start
             system_entry["link_end"] = apo_end
+            system_entry["link_bb_start"] = apo_bb_start
+            system_entry["link_bb_end"] = apo_bb_end
 
         # Process pred structure
         if link_type == "pred":
-            pred_start, pred_end = self._append_structure_data(
-                self.pred, system_data.link
+            pred_start, pred_end, pred_bb_start, pred_bb_end = (
+                self._append_structure_data(self.pred, system_data.link)
             )
             system_entry["link_start"] = pred_start
             system_entry["link_end"] = pred_end
+            system_entry["link_bb_start"] = pred_bb_start
+            system_entry["link_bb_end"] = pred_bb_end
 
         curr_num = len(self.root.attrs["system_lookup"])
         logger.info(
