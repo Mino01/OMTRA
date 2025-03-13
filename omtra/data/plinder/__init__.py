@@ -3,6 +3,14 @@ from typing import List, Optional, Dict
 from dataclasses import dataclass
 
 @dataclass
+class BackboneData:
+    coords: np.ndarray
+    res_ids: np.ndarray
+    res_names: np.ndarray
+    chain_ids: np.ndarray
+    
+
+@dataclass
 class StructureData:
     coords: np.ndarray
     atom_names: np.ndarray
@@ -10,6 +18,7 @@ class StructureData:
     res_ids: np.ndarray
     res_names: np.ndarray
     chain_ids: np.ndarray
+    backbone: BackboneData
     cif: Optional[str] = None
 
 
