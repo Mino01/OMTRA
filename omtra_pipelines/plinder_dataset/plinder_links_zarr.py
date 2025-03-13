@@ -31,11 +31,12 @@ class PlinderLinksZarrConverter:
     def __init__(
         self,
         output_path: str,
-        struc_chunk_size: int = 235000,
-        lig_atom_chunk_size: int = 2000,
-        lig_bond_chunk_size: int = 2000,
-        pharmacophore_chunk_size: int = 2000,
-        pocket_chunk_size: int = 2000,
+        struc_chunk_size: int = 1500000,
+        lig_atom_chunk_size: int = 10000,
+        lig_bond_chunk_size: int = 10000,
+        pharmacophore_chunk_size: int = 10000,
+        pocket_chunk_size: int = 150000,
+        backbone_chunk_size: int = 150000,
         category: str = None,
         num_workers: int = 1,
     ):
