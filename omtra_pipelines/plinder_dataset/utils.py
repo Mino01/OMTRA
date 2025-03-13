@@ -206,7 +206,7 @@ def setup_logger(
 
     if log_file is None:
         log_file = os.environ.get(
-            "LOG_FILE_PATH", "/net/galaxy/home/koes/tjkatz/for_omtra/logs/default.log"
+            "LOG_FILE_PATH", "~/plinder_default.log"
         )
 
     if log_file is not None:

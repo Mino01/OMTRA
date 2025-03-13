@@ -23,6 +23,7 @@ logger = setup_logger(
     __name__,
 )
 
+# TODO: add fraction ligand within 4A receptor threshold
 
 def check_atom_map(mol: Chem.rdchem.Mol, allowed_atoms: List[str] = LIGAND_MAP) -> bool:
     for atom in mol.GetAtoms():
