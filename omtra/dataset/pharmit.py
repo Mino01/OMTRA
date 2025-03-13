@@ -4,6 +4,7 @@ import numpy as np
 from omegaconf import DictConfig
 import functools
 import math
+from pathlib import Path
 
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.data.graph import build_complex_graph
@@ -12,15 +13,35 @@ from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
 from omtra.data.graph import edge_builders, approx_n_edges
+from omtra.priors.prior_factory import get_prior
+from omtra.constants import lig_atom_type_map, ph_idx_to_type
 
 class PharmitDataset(ZarrDataset):
     def __init__(self, 
                  split: str,
                  processed_data_dir: str,
                  graph_config: DictConfig,
+                 prior_config: DictConfig,
     ):
         super().__init__(split, processed_data_dir)
         self.graph_config = graph_config
+        self.prior_config = prior_config
+
+
+        dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
+        dists_dict = np.load(dists_file)
+        lig_c_idx_to_val = dists_dict['p_tcv_c_space'] # a list of unique charges that appear in the dataset
+
+        self.n_categories_dict = {
+            'lig': {
+                'a': len(lig_atom_type_map),
+                'c': len(lig_c_idx_to_val),
+                'e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
+            },
+            'pharm': {
+                'a': len(ph_idx_to_type),
+            }
+        }
 
     @classproperty
     def name(cls):
@@ -78,36 +99,72 @@ class PharmitDataset(ZarrDataset):
         # convert sparse xae to dense xae
         lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(*xace_ligand)
 
-        # TODO: now that we have task information, we can actually write in necessary flow-matching related functionality:
-        # - sampling priors for each modality
-        # - doing OT alignment on ligand and pharmacophore nodes
-        # - set graph keys to things like x_1_true and x_0 for ground-truth positions and prior samples
-
         # construct inputs to graph building function
         g_node_data = {
-            'lig': {'x': lig_x, 'a': lig_a, 'c': lig_c},
+            'lig': {'x_1_true': lig_x, 'a_1_true': lig_a, 'c_1_true': lig_c},
         }
         g_edge_data = {
-            'lig_to_lig': {'e': lig_e},
+            'lig_to_lig': {'e_1_true': lig_e},
         }
         g_edge_idxs = {
             'lig_to_lig': lig_edge_idxs,
         }
 
+        # get the prior functions for this task
+        priors_fns = get_prior(task_class, self.prior_config, train=True)
+
+        # sample priors for ligand modalities
+        # TODO: this logic will probably be duplicated within this dataset, in other dataset classes,
+        # and also probably in the model class itself for inference, so we should probably make it modular
+        for modalitiy in 'xace':
+            prior_name, prior_func = priors_fns['lig'][modalitiy]
+
+            if prior_name == 'masked':
+                prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict['lig'][modalitiy])
+            
+            if modalitiy == 'e':
+                upper_edge_mask = torch.zeros_like(lig_e, dtype=torch.bool)
+                upper_edge_mask[:lig_e.shape[0]//2] = 1
+                upper_edge_prior = prior_func(lig_e[upper_edge_mask])
+                edge_prior = torch.zeros_like(lig_e)
+                edge_prior[upper_edge_mask] = upper_edge_prior
+                edge_prior[~upper_edge_mask] = upper_edge_prior
+                g_edge_data['lig_to_lig']['e_0'] = edge_prior
+            else:
+                target_data = g_node_data['lig'][f'{modalitiy}_1_true']
+                g_node_data['lig'][f'{modalitiy}_0'] = prior_func(target_data)
+
         # if this task includes pharmacophore data, then we need to slice and add that data to the graph
         if include_pharmacophore:
+            # read pharmacophore data from zarr store
             start_idx, end_idx = self.slice_array('pharm/node/graph_lookup', idx)
             pharm_x = self.slice_array('pharm/node/x', start_idx, end_idx)
             pharm_a = self.slice_array('pharm/node/a', start_idx, end_idx)
-            pharm_x = torch.from_numpy(pharm_x)
-            pharm_a = torch.from_numpy(pharm_a)
-            g_node_data['pharm'] =  {'x': pharm_x, 'a': pharm_a}
+            pharm_v = self.slice_array('pharm/node/v', start_idx, end_idx)
+            pharm_x = torch.from_numpy(pharm_x).float()
+            pharm_a = torch.from_numpy(pharm_a).long()
+            pharm_v = torch.from_numpy(pharm_v).float()
+
+            # add target pharmacophore data to graph
+            g_node_data['pharm'] =  {
+                'x_1_true': pharm_x, 
+                'a_1_true': pharm_a, 
+                'v_1_true': pharm_v
+            }
+
+            # now sample priors for pharmacophore modalities
+            for modality in 'xav':
+                prior_name, prior_func = priors_fns['pharm'][modality]
+
+                if prior_name == 'masked':
+                    prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict['pharm'][modality])
+
+                g_node_data['pharm'][f'{modality}_0'] = prior_func(pharm_x)
 
             assert self.graph_config.edges['pharm_to_pharm']['type'] == 'complete', 'the following code assumes complete pharm-pharm graph'
             g_edge_idxs['pharm_to_pharm'] = edge_builders.complete_graph(pharm_x)
 
         # for now, we assume lig-pharm edges are built on the fly
-
         g = build_complex_graph(node_data=g_node_data, edge_idxs=g_edge_idxs, edge_data=g_edge_data)
 
         return g

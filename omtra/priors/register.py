@@ -25,5 +25,18 @@ def register_inference_prior(name: str):
         return fn
     return decorator
 
-# import priors, this triggers the registration of the priors
-import omtra.priors.priors
+def get_train_prior(name: str):
+    """
+    Get the training time prior function with the given name.
+    :param name: The name of the prior.
+    :return: The prior function.
+    """
+    return train_prior_register[name]
+
+def get_inference_prior(name: str):
+    """
+    Get the inference time prior function with the given name.
+    :param name: The name of the prior.
+    :return: The prior function.
+    """
+    return inference_prior_register[name]

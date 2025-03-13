@@ -57,9 +57,7 @@ class LigandConformer(Task):
     observed_at_t0 = ['ligand_identity']
     observed_at_t1 = ['ligand_identity', 'ligand_structure']
 
-    priors = {
-        'lig': pc.ligand_conformer
-    }
+    priors = dict(lig=pc.ligand_conformer)
 
 ## 
 # tasks with ligand + pharmacophore
@@ -74,6 +72,12 @@ class DeNovoLigandPharmacophore(Task):
         'pharm': pc.denovo_pharmacophore
     }
 
+@register_task("denovo_ligand_from_pharmacophore")
+class DeNovoLigandFromPharmacophore(Task):
+    observed_at_t0 = ['pharmacophore']
+    observed_at_t1 = ['ligand_identity', 'ligand_structure', 'pharmacophore']
+
+    priors = dict(lig=pc.denovo_ligand, pharm=pc.fixed_pharmacophore)
 
 # while technically possible, i don't think this task is very useful?
 # @register_task("ligand_conformer_pharmacophore")
@@ -89,12 +93,9 @@ class ProteinLigandDeNovo(Task):
     observed_at_t0 = []
     observed_at_t1 = ['ligand_identity', 'ligand_structure', 'protein']
 
-    priors = {
-        'lig': pc.denovo_ligand
-    }
+    priors = dict(lig=pc.denovo_ligand)
     priors['protein'] = {
-        'type': 'dd_gaussian',
-        'params': {'std': 2.0}
+        'type': 'target_dependent_gaussian',
     }
 
 
@@ -104,11 +105,25 @@ class ApoConditionedDeNovoLigand(Task):
     observed_at_t1 = ['ligand_identity', 'ligand_structure']
     protein_state_t0 = 'apo'
 
+    priors = {
+        'lig': pc.denovo_ligand
+    }
+    priors['protein'] = {
+        'type': 'data_prior', # in this case the prior is an actual apo structure itself; a sample from a data distribution
+    }
+
 @register_task("unconditional_ligand_docking")
 class UnconditionalLigandDocking(Task):
     """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
     observed_at_t0 = ['ligand_identity']
     observed_at_t1 = ['ligand_identity', 'ligand_structure', 'protein']
+
+    priors = {
+        'lig': pc.ligand_conformer
+    }
+    priors['protein'] = {
+        'type': 'target_dependent_gaussian',
+    }
 
 @register_task("apo_conditioned_ligand_docking")
 class ApoConditionedLigandDocking(Task):
@@ -116,6 +131,13 @@ class ApoConditionedLigandDocking(Task):
     observed_at_t0 = ['ligand_identity', 'protein']
     observed_at_t1 = ['ligand_identity', 'ligand_structure', 'protein']
     protein_state_t0 = 'apo'
+
+    priors = {
+        'lig': pc.ligand_conformer
+    }
+    priors['protein'] = {
+        'type': 'data_prior', # in this case the prior is an actual apo structure itself; a sample from a data distribution
+    }
 
 ##
 # Tasks with ligand+protein+pharmacophore
@@ -125,16 +147,22 @@ class ProteinLigandPharmacophoreDeNovo(Task):
     observed_at_t0 = []
     observed_at_t1 = ['ligand_identity', 'ligand_structure', 'protein', 'pharmacophore']
 
+    priors = dict(lig=pc.denovo_ligand, pharm=pc.denovo_pharmacophore)
+    priors['protein'] = {
+        'type': 'target_dependent_gaussian',
+    }
+
 @register_task("apo_conditioned_denovo_ligand_pharmacophore")
 class ApoConditionedDeNovoLigandPharmacophore(Task):
     observed_at_t0 = ['protein']
     observed_at_t1 = ['ligand_identity', 'ligand_structure', 'pharmacophore']
     protein_state_t0 = 'apo'
 
+# TODO: have a think about these guys
 @register_task("unconditional_ligand_docking_pharmacophore")
 class UnconditionalLigandDockingPharmacophore(Task):
     """Docking a ligand into the protein while generating a pharmacophore, assuming no knowledge of the protein structure at t=0"""
-    observed_at_t0 = ['ligand_identity']
+    observed_at_t0 = ['ligand_identity',]
     observed_at_t1 = ['ligand_identity', 'ligand_structure', 'protein', 'pharmacophore']
 
 @register_task("apo_conditioned_ligand_docking_pharmacophore")

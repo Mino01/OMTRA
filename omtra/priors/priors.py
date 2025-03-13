@@ -60,4 +60,10 @@ def ctmc_masked_prior(x1: torch.Tensor, n_categories: int):
     p = torch.ones_like(x1)*n_categories
     return p
 
-
+@register_train_prior("fixed")
+@register_inference_prior("fixed")
+def fixed_prior(x1: torch.Tensor):
+    """
+    Generate a fixed prior feature.
+    """
+    return x1.clone()

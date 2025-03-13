@@ -52,7 +52,7 @@ def build_complex_graph(
     num_nodes = {}
     for ntype in node_types:
         if ntype in node_data:
-            num_nodes[ntype] = node_data[ntype]['x'].shape[0]
+            num_nodes[ntype] = next(iter(node_data[ntype].values())).shape[0]
         else:
             num_nodes[ntype] = 0
 
