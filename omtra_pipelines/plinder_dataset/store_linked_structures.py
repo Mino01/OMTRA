@@ -6,9 +6,8 @@ from pathlib import Path
 import pandas as pd
 import os
 
-os.environ["LOG_FILE_PATH"] = (
-    "/net/galaxy/home/koes/tjkatz/for_omtra/logs/plinder_apo_storage_train_1000.log"
-)
+log_file_path = os.environ.get("LOG_FILE_PATH", "plinder_storage.log")
+os.environ["LOG_FILE_PATH"] = log_file_path
 
 from omtra_pipelines.plinder_dataset.plinder_pipeline import SystemProcessor
 from omtra_pipelines.plinder_dataset.plinder_links_zarr import (
@@ -89,14 +88,13 @@ def main():
         num_workers=args.num_cpus,
         category=args.type,
     )
-    npnde_apos = ["6r41__1__1.A__1.B_1.D", "1o01__1__1.A__1.I_1.L"]
+
     df = pd.read_parquet(args.data).drop_duplicates("system_id")
     df = df[df["split"] == args.split]
     link_df = df[df[f"{args.type}_ids"].notna()]
     link_system_ids = list(link_df["system_id"])
 
     if args.num_systems:
-        link_system_ids = npnde_apos + link_system_ids
         link_system_ids = link_system_ids[: args.num_systems]
 
     converter.process_dataset(link_system_ids, max_pending=args.max_pending)
