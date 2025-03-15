@@ -400,6 +400,8 @@ class SystemProcessor:
         mols = list(ligand_mols.values())
 
         receptor_mol = Chem.MolFromPDBFile(self.system.receptor_pdb)
+        if not receptor_mol:
+            receptor_mol = Chem.MolFromPDBFile(self.system.receptor_pdb, sanitize=False)
 
         (xace_mols, failed_idxs, failure_counts, tcv_counts) = (
             self.ligand_tensorizer.featurize_molecules(mols)
