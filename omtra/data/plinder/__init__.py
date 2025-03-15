@@ -18,6 +18,7 @@ class StructureData:
     res_ids: np.ndarray
     res_names: np.ndarray
     chain_ids: np.ndarray
+    backbone_mask: np.ndarray
     backbone: BackboneData
     cif: Optional[str] = None
 

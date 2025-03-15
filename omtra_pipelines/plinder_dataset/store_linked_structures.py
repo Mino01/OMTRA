@@ -43,13 +43,6 @@ def parse_args():
     )
     parser.add_argument("--output", type=str, required=True, help="Path to zarr store")
     parser.add_argument(
-        "--log_dir",
-        type=str,
-        required=False,
-        default="/net/galaxy/home/koes/tjkatz/for_omtra/logs",
-        help="Path to log directory",
-    )
-    parser.add_argument(
         "--pocket_cutoff",
         type=int,
         required=False,

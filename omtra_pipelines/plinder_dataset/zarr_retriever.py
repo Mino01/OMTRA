@@ -139,6 +139,7 @@ class PlinderZarrRetriever:
             res_ids=self.root["receptor"]["res_ids"][rec_start:rec_end],
             res_names=self.root["receptor"]["res_names"][rec_start:rec_end].astype(str),
             chain_ids=self.root["receptor"]["chain_ids"][rec_start:rec_end].astype(str),
+            backbone_mask=self.root["receptor"]["backbone_mask"][rec_start:rec_end],
             cif=system_info["rec_cif"],
             backbone=backbone,
         )
@@ -201,6 +202,7 @@ class PlinderZarrRetriever:
             chain_ids=self.root["pocket"]["chain_ids"][pocket_start:pocket_end].astype(
                 str
             ),
+            backbone_mask=self.root["pocket"]["backbone_mask"][pocket_start:pocket_end],
             backbone=pocket_backbone,
         )
 
@@ -234,6 +236,7 @@ class PlinderZarrRetriever:
                 chain_ids=self.root["apo"]["chain_ids"][link_start:link_end].astype(
                     str
                 ),
+                backbone_mask=self.root["apo"]["backbone_mask"][link_start:link_end],
                 cif=system_info["link_cif"],
                 backbone=apo_backbone,
             )
@@ -263,6 +266,7 @@ class PlinderZarrRetriever:
                 chain_ids=self.root["pred"]["chain_ids"][link_start:link_end].astype(
                     str
                 ),
+                backbone_mask=self.root["apo"]["backbone_mask"][link_start:link_end],
                 cif=system_info["link_cif"],
                 backbone=pred_backbone,
             )

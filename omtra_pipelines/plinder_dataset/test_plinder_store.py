@@ -33,6 +33,12 @@ def check_receptor(system: SystemData, actual_system: SystemData):
     )
 
     assert np.all(
+        system.receptor.backbone_mask == actual_system.receptor.backbone_mask
+    ), (
+        f"Receptor backbone_mask mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
+    assert np.all(
         system.receptor.backbone.coords == actual_system.receptor.backbone.coords
     ), (
         f"Receptor backbone coords mismatch {system.system_id} {system.ligand_id} {system.link_id}"
@@ -69,6 +75,7 @@ def check_pocket(system: SystemData, actual_system: SystemData):
             system.pocket.atom_names[i],
             system.pocket.elements[i],
             system.pocket.chain_ids[i],
+            system.pocket.backbone_mask[i],
         )
         system_atoms[atom_id] = system.pocket.coords[i]
 
@@ -79,6 +86,7 @@ def check_pocket(system: SystemData, actual_system: SystemData):
             actual_system.pocket.atom_names[i],
             actual_system.pocket.elements[i],
             actual_system.pocket.chain_ids[i],
+            actual_system.pocket.backbone_mask[i],
         )
         actual_system_atoms[atom_id] = actual_system.pocket.coords[i]
 
@@ -138,23 +146,33 @@ def check_pharmacophore(system: SystemData, actual_system: SystemData):
     actual_system_features = []
 
     for i in range(len(system.pharmacophore.coords)):
+        coords_tuple = tuple(float(x) for x in system.pharmacophore.coords[i])
+        vector_tuple = None
+        if system.pharmacophore.vectors[i] is not None:
+            vector_tuple = tuple(
+                float(x) for x in system.pharmacophore.vectors[i].flatten()
+            )
+
         feature = (
-            tuple(system.pharmacophore.coords[i]),
+            coords_tuple,
             system.pharmacophore.types[i],
-            tuple(system.pharmacophore.vectors[i])
-            if system.pharmacophore.vectors[i] is not None
-            else None,
+            vector_tuple,
             system.pharmacophore.interactions[i],
         )
         system_features.append(feature)
 
     for i in range(len(actual_system.pharmacophore.coords)):
+        coords_tuple = tuple(float(x) for x in actual_system.pharmacophore.coords[i])
+        vector_tuple = None
+        if actual_system.pharmacophore.vectors[i] is not None:
+            vector_tuple = tuple(
+                float(x) for x in actual_system.pharmacophore.vectors[i].flatten()
+            )
+
         feature = (
-            tuple(actual_system.pharmacophore.coords[i]),
+            coords_tuple,
             actual_system.pharmacophore.types[i],
-            tuple(actual_system.pharmacophore.vectors[i])
-            if actual_system.pharmacophore.vectors[i] is not None
-            else None,
+            vector_tuple,
             actual_system.pharmacophore.interactions[i],
         )
         actual_system_features.append(feature)
@@ -166,12 +184,15 @@ def check_pharmacophore(system: SystemData, actual_system: SystemData):
         sys_feat = system_features[i]
         actual_feat = actual_system_features[i]
 
-        coords_match = np.allclose(sys_feat[0], actual_feat[0], atol=1e-6)
-
+        coords_match = sys_feat[0] == actual_feat[0] or np.allclose(
+            sys_feat[0], actual_feat[0], atol=1e-6
+        )
         types_match = sys_feat[1] == actual_feat[1]
 
         if sys_feat[2] is not None and actual_feat[2] is not None:
-            vectors_match = np.allclose(sys_feat[2], actual_feat[2], atol=1e-6)
+            vectors_match = sys_feat[2] == actual_feat[2] or np.allclose(
+                sys_feat[2], actual_feat[2], atol=1e-6
+            )
         else:
             vectors_match = sys_feat[2] == actual_feat[2]
 
@@ -232,6 +253,9 @@ def check_link(system: SystemData, actual_system: SystemData):
     assert np.all(system.link.chain_ids == actual_system.link.chain_ids), (
         f"link chain ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
+    assert np.all(system.link.backbone_mask == actual_system.link.backbone_mask), (
+        f"link backbone_mask mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
     assert system.link.cif == actual_system.link.cif, (
         f"link cif mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
@@ -282,6 +306,10 @@ def check_link(system: SystemData, actual_system: SystemData):
         system.link.backbone.chain_ids == system.receptor.backbone.chain_ids
     ), (
         f"link+receptor backbone chain_ids mismatch {system.system_id} {system.ligand_id} {system.link_id}"
+    )
+
+    assert np.all(system.link.backbone_mask == system.receptor.backbone_mask), (
+        f"link+receptor backbone_mask mismatch {system.system_id} {system.ligand_id} {system.link_id}"
     )
 
 

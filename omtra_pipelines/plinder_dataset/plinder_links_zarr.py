@@ -104,6 +104,9 @@ class PlinderLinksZarrConverter:
                     compressors=None,
                 )
                 group.create_array(
+                    "backbone_mask", shape=(0,), chunks=(chunk,), dtype=bool
+                )
+                group.create_array(
                     "backbone_coords",
                     shape=(0, 3, 3),
                     chunks=(chunk, 3, 3),
@@ -270,6 +273,9 @@ class PlinderLinksZarrConverter:
         all_chain_ids = np.concatenate(
             [data.chain_ids for data in data_batch if len(data.chain_ids) > 0]
         )
+        all_backbone_masks = np.concatenate(
+            [data.backbone_mask for data in data_batch if len(data.backbone_mask) > 0]
+        )
 
         all_bb_coords = np.vstack(
             [
@@ -306,6 +312,7 @@ class PlinderLinksZarrConverter:
         group["res_ids"].append(all_res_ids)
         group["res_names"].append(all_res_names)
         group["chain_ids"].append(all_chain_ids)
+        group["backbone_mask"].append(all_backbone_masks)
 
         group["backbone_coords"].append(all_bb_coords)
         group["backbone_res_ids"].append(all_bb_res_ids)
@@ -422,9 +429,20 @@ class PlinderLinksZarrConverter:
                 system_id=system_id, link_type=self.category
             )
             return system_processor.process_system()
+
         except Exception as e:
             logging.exception(f"Error processing system {system_id}: {e}")
             return None
+
+    def _collect_batch_results(self, results_list):
+        batch_results = {self.category: []}
+
+        for system_data in results_list:
+            if system_data and system_data.get(self.category):
+                for link_id, system_list in system_data[self.category].items():
+                    batch_results[self.category].extend(system_list)
+
+        return batch_results
 
     def _process_system_batch(self, system_ids: List[str]):
         results = {}
@@ -435,8 +453,7 @@ class PlinderLinksZarrConverter:
                 system_data = self._process_system(system_id)
                 if system_data and system_data.get(self.category):
                     for link_id, system_list in system_data[self.category].items():
-                        for system in system_list:
-                            results[self.category].append(system)
+                        results[self.category].extend(system_list)
             except Exception as e:
                 logger.exception(f"Error processing system batch {system_id}: {e}")
 
@@ -607,86 +624,39 @@ class PlinderLinksZarrConverter:
             for i in range(0, len(system_ids), self.batch_size)
         ]
 
-        with mp.Manager() as manager:
-            lock = manager.Lock()
-            result_queue = manager.Queue()
-            error_counter = manager.Value("i", 0)
+        pbar = tqdm(
+            total=len(batches), desc="Processing system batches", unit="batches"
+        )
+        successful_count = 0
+        failed_count = 0
 
-            def _write_results_worker():
-                while True:
-                    try:
-                        result = result_queue.get(timeout=1)
-                        if result is None:
-                            break
-
-                        with lock:
-                            if result.get(self.category):
-                                self._write_system_batch(result[self.category])
-
-                    except queue.Empty:
-                        continue
-                    except Exception as e:
-                        logger.exception(f"Error in writer thread: {e}")
-                        error_counter.value += 1
-
-            writer_thread = threading.Thread(target=_write_results_worker)
-            writer_thread.start()
-
-            pbar = tqdm(
-                total=len(batches), desc="Processing system batches", unit="batches"
-            )
-            successful_count = [0]
-            failed_count = [0]
-
-            def process_callback(result):
-                if result:
-                    result_queue.put(result)
-                    successful_count[0] += 1
-                else:
-                    failed_count[0] += 1
-                pbar.set_postfix(
-                    {"success": successful_count[0], "failed": failed_count[0]}
-                )
-                pbar.update(1)
-
-            def error_callback(error):
-                logger.exception(f"Error in processing: {error}")
-                traceback.print_exception(type(error), error, error.__traceback__)
-                failed_count[0] += 1
-                pbar.set_postfix(
-                    {"success": successful_count[0], "failed": failed_count[0]}
-                )
-                pbar.update(1)
-
-            with mp.Pool(processes=self.num_workers) as pool:
-                pending_jobs = []
-
-                for batch in batches:
-                    while len(pending_jobs) >= max_pending:
-                        pending_jobs = [job for job in pending_jobs if not job.ready()]
-                        if len(pending_jobs) >= max_pending:
-                            time.sleep(0.1)
-
-                    job = pool.apply_async(
-                        self._process_system_batch,
-                        args=(batch,),
-                        callback=process_callback,
-                        error_callback=error_callback,
-                    )
-                    pending_jobs.append(job)
-
-                for job in pending_jobs:
-                    job.wait()
-
-                result_queue.put(None)
-                writer_thread.join()
-
-                pbar.close()
-
-            end = len(self.system_lookup)
+        for batch_idx, batch in enumerate(batches):
             logger.info(
-                f"Processing complete. Success: {successful_count[0]}, Failed: {failed_count[0]}"
+                f"Processing batch {batch_idx + 1}/{len(batches)} with {len(batch)} systems"
             )
 
-            if self.category:
-                self.root.attrs["system_type_idxs"].append((self.category, start, end))
+            batch_results = []
+            with mp.Pool(processes=self.num_workers) as pool:
+                system_results = pool.map(self._process_system, batch)
+
+                valid_results = [r for r in system_results if r is not None]
+                failed_count += len(system_results) - len(valid_results)
+                successful_count += len(valid_results)
+
+                if valid_results:
+                    batch_data = self._collect_batch_results(valid_results)
+                    if batch_data[self.category]:
+                        self._write_system_batch(batch_data[self.category])
+
+            pbar.set_postfix({"success": successful_count, "failed": failed_count})
+            pbar.update(1)
+
+        pbar.close()
+
+        end = len(self.system_lookup)
+        logger.info(
+            f"Processing complete. Success: {successful_count}, Failed: {failed_count}"
+        )
+
+        if self.category:
+            self.root.attrs["system_type_idxs"].append((self.category, start, end))

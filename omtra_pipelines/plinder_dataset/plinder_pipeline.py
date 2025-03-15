@@ -139,6 +139,11 @@ class SystemProcessor:
         if backbone_data is None:
             return None
 
+        receptor = self.check_backbone_order(receptor)
+        if receptor is None:
+            return None
+
+        bb_mask = struc.filter_peptide_backbone(receptor)
         return StructureData(
             cif=str(raw_cif),
             coords=receptor.coord,
@@ -147,8 +152,93 @@ class SystemProcessor:
             res_ids=receptor.res_id,
             res_names=receptor.res_name,
             chain_ids=receptor.chain_id,
+            backbone_mask=bb_mask,
             backbone=backbone_data,
         )
+
+    def check_backbone_order(self, receptor: struc.AtomArray) -> struc.AtomArray:
+        unique_residues = list(set(zip(receptor.chain_id, receptor.res_id)))
+        reordering_needed = False
+
+        for chain_id, res_id in unique_residues:
+            residue_mask = (receptor.chain_id == chain_id) & (receptor.res_id == res_id)
+            residue_atoms = receptor[residue_mask]
+
+            n_indices = np.where(residue_atoms.atom_name == "N")[0]
+            ca_indices = np.where(residue_atoms.atom_name == "CA")[0]
+            c_indices = np.where(residue_atoms.atom_name == "C")[0]
+
+            if len(n_indices) == 0 or len(ca_indices) == 0 or len(c_indices) == 0:
+                continue
+
+            full_indices = np.where(residue_mask)[0]
+            n_idx = full_indices[n_indices[0]]
+            ca_idx = full_indices[ca_indices[0]]
+            c_idx = full_indices[c_indices[0]]
+
+            if not (n_idx < ca_idx < c_idx):
+                reordering_needed = True
+                break
+
+        if reordering_needed:
+            logger.warning(f"System {self.system_id} requires backbone atom reordering")
+            return self.reorder_backbone_atoms(receptor, unique_residues)
+        else:
+            return receptor
+
+    def reorder_backbone_atoms(
+        self, receptor: struc.AtomArray, unique_residues
+    ) -> struc.AtomArray:
+        reordered_atoms = []
+
+        for chain_id, res_id in unique_residues:
+            residue_mask = (receptor.chain_id == chain_id) & (receptor.res_id == res_id)
+            residue_atoms = receptor[residue_mask]
+
+            n_mask = residue_atoms.atom_name == "N"
+            ca_mask = residue_atoms.atom_name == "CA"
+            c_mask = residue_atoms.atom_name == "C"
+            backbone_mask = n_mask | ca_mask | c_mask
+
+            n_idx = np.where(n_mask)[0][0] if np.any(n_mask) else -1
+            ca_idx = np.where(ca_mask)[0][0] if np.any(ca_mask) else -1
+            c_idx = np.where(c_mask)[0][0] if np.any(c_mask) else -1
+
+            new_order = []
+
+            if n_idx > 0:
+                new_order.extend(list(range(n_idx)))
+
+            if n_idx != -1:
+                new_order.append(n_idx)
+
+            if n_idx != -1 and ca_idx != -1:
+                for i in range(n_idx + 1, ca_idx):
+                    if not backbone_mask[i]:
+                        new_order.append(i)
+
+            if ca_idx != -1:
+                new_order.append(ca_idx)
+
+            if ca_idx != -1 and c_idx != -1:
+                for i in range(ca_idx + 1, c_idx):
+                    if not backbone_mask[i]:
+                        new_order.append(i)
+
+            if c_idx != -1:
+                new_order.append(c_idx)
+
+            if c_idx != -1 and c_idx < len(residue_atoms) - 1:
+                new_order.extend(range(c_idx + 1, len(residue_atoms)))
+
+            for idx in new_order:
+                reordered_atoms.append(residue_atoms[idx])
+
+        if reordered_atoms:
+            return struc.stack(reordered_atoms)
+        else:
+            logger.warning(f"Failed to reorder backbone {self.system_id}")
+            return None
 
     def check_ordering(
         self, receptor: struc.AtomArray, linked_structure: struc.AtomArray
@@ -486,6 +576,12 @@ class SystemProcessor:
         backbone = pocket[struc.filter_peptide_backbone(pocket)]
         backbone_data = self.extract_backbone(backbone)
 
+        pocket = self.check_backbone_order(pocket)
+        if pocket is None:
+            return None
+
+        bb_mask = struc.filter_peptide_backbone(pocket)
+
         return StructureData(
             coords=pocket.coord,
             atom_names=pocket.atom_name,
@@ -493,6 +589,7 @@ class SystemProcessor:
             res_ids=pocket.res_id,  # original residue ids
             res_names=pocket.res_name,
             chain_ids=pocket.chain_id,
+            backbone_mask=bb_mask,
             backbone=backbone_data,
         )
 
