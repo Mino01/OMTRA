@@ -3,6 +3,7 @@ import torch
 from omegaconf import DictConfig
 
 from omtra.dataset.zarr_dataset import ZarrDataset
+from omtra.constants import lig_atom_type_map, npnde_atom_type_map
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders
 from omtra.data.xace_ligand import sparse_to_dense
@@ -423,6 +424,8 @@ class PlinderDataset(ZarrDataset):
     def convert_ligand(
         self,
         ligand: LigandData,
+        ligand_id: str,
+        receptor: StructureData = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -460,11 +463,98 @@ class PlinderDataset(ZarrDataset):
         edge_idxs = {
             "lig_to_lig": lig_edge_idxs,
         }
+        if ligand.is_covalent and ligand.linkages and receptor is not None:
+            prot_atom_to_lig_idxs = []
+            prot_res_to_lig_idxs = []
+            lig_asym_id = ligand_id.split(".")[1]
+
+            lig_identifier = f"{ligand.ccd}:{lig_asym_id}"
+
+            for linkage in ligand.linkages:
+                prtnr1, prtnr2 = linkage.split("__")
+
+                if lig_identifier in prtnr1:
+                    lig_part = prtnr1
+                    prot_part = prtnr2
+                elif lig_identifier in prtnr2:
+                    lig_part = prtnr2
+                    prot_part = prtnr1
+                else:
+                    continue
+
+                (
+                    prot_auth_resid,
+                    prot_resname,
+                    prot_asym_id,
+                    prot_seq_resid,
+                    prot_atom_name,
+                ) = prot_part.split(":")
+                (
+                    lig_auth_resid,
+                    lig_resname,
+                    lig_asym_id,
+                    lig_seq_resid,
+                    lig_atom_name,
+                ) = lig_part.split(":")
+
+                prot_atom_idx = None
+                for i, atom_name in enumerate(receptor.atom_names):
+                    if (
+                        receptor.res_ids[i] == int(prot_seq_resid)
+                        and atom_name == prot_atom_name
+                    ):
+                        prot_atom_idx = i
+                        break
+
+                lig_atom_idx = None
+                for i, atom_type in enumerate(ligand.atom_types):
+                    atom_name = lig_atom_type_map[atom_type]
+                    if atom_name == lig_atom_name[0] and lig_auth_resid == i:
+                        lig_atom_idx = i
+                        break
+
+                prot_res_idx = None
+                for i, res_id in enumerate(receptor.backbone.res_ids):
+                    if res_id == int(prot_seq_resid):
+                        prot_res_idx = i
+                        break
+
+                if prot_atom_idx is not None and lig_atom_idx is not None:
+                    prot_atom_to_lig_idxs.append([prot_atom_idx, lig_atom_idx])
+
+                if prot_res_idx is not None and lig_atom_idx is not None:
+                    prot_res_to_lig_idxs.append([prot_res_idx, lig_atom_idx])
+
+            if prot_atom_to_lig_idxs:
+                prot_atom_to_lig_tensor = torch.tensor(
+                    prot_atom_to_lig_idxs, dtype=torch.long
+                ).t()
+                edge_idxs["prot_atom_to_lig"] = prot_atom_to_lig_tensor
+                # feature for covalent bond
+                edge_data["prot_atom_to_lig"] = {
+                    "e": torch.ones(
+                        (prot_atom_to_lig_tensor.shape[1], 1), dtype=torch.float
+                    )
+                }
+
+            if prot_res_to_lig_idxs:
+                prot_res_to_lig_tensor = torch.tensor(
+                    prot_res_to_lig_idxs, dtype=torch.long
+                ).t()
+                edge_idxs["prot_res_to_lig"] = prot_res_to_lig_tensor
+                # feature for covalent bond
+                edge_data["prot_res_to_lig"] = {
+                    "e": torch.ones(
+                        (prot_res_to_lig_tensor.shape[1], 1), dtype=torch.float
+                    )
+                }
 
         return node_data, edge_idxs, edge_data
 
     def convert_npndes(
-        self, npndes: Optional[Dict[str, LigandData]]
+        self,
+        npndes: Dict[str, LigandData],
+        receptor: StructureData = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -482,6 +572,9 @@ class PlinderDataset(ZarrDataset):
         all_atom_charges = []
         all_bond_types = []
         all_bond_indices = []
+
+        all_prot_atom_to_npnde_idxs = []
+        all_prot_res_to_npnde_idxs = []
 
         node_offset = 0
 
@@ -507,6 +600,73 @@ class PlinderDataset(ZarrDataset):
 
                 all_bond_types.append(bond_types)
                 all_bond_indices.append(adjusted_indices)
+
+            if (
+                ligand_data.is_covalent
+                and ligand_data.linkages
+                and receptor is not None
+            ):
+                npnde_asym_id = npnde_id.split(".")[1]
+                npnde_identifier = f"{ligand_data.ccd}:{npnde_asym_id}"
+
+                for linkage in ligand_data.linkages:
+                    prtnr1, prtnr2 = linkage.split("__")
+
+                    if npnde_identifier in prtnr1:
+                        npnde_part = prtnr1
+                        prot_part = prtnr2
+                    elif npnde_identifier in prtnr2:
+                        npnde_part = prtnr2
+                        prot_part = prtnr1
+                    else:
+                        continue
+
+                    (
+                        prot_auth_resid,
+                        prot_resname,
+                        prot_asym_id,
+                        prot_seq_resid,
+                        prot_atom_name,
+                    ) = prot_part.split(":")
+                    (
+                        npnde_auth_resid,
+                        npnde_resname,
+                        npnde_asym_id,
+                        npnde_seq_resid,
+                        npnde_atom_name,
+                    ) = npnde_part.split(":")
+
+                    prot_atom_idx = None
+                    for i, atom_name in enumerate(receptor.atom_names):
+                        if (
+                            receptor.res_ids[i] == int(prot_seq_resid)
+                            and atom_name == prot_atom_name
+                        ):
+                            prot_atom_idx = i
+                            break
+
+                    npnde_atom_idx = None
+                    for i, atom_type in enumerate(ligand_data.atom_types):
+                        atom_name = npnde_atom_type_map[atom_type]
+                        if atom_name == npnde_atom_name[0] and npnde_auth_resid == i:
+                            npnde_atom_idx = i
+                            break
+
+                    prot_res_idx = None
+                    for i, res_id in enumerate(receptor.backbone.res_ids):
+                        if res_id == int(prot_seq_resid):
+                            prot_res_idx = i
+                            break
+
+                    if prot_atom_idx is not None and npnde_atom_idx is not None:
+                        all_prot_atom_to_npnde_idxs.append(
+                            [prot_atom_idx, npnde_atom_idx + node_offset]
+                        )
+
+                    if prot_res_idx is not None and npnde_atom_idx is not None:
+                        all_prot_res_to_npnde_idxs.append(
+                            [prot_res_idx, npnde_atom_idx + node_offset]
+                        )
 
             node_offset += coords.shape[0]
 
@@ -548,6 +708,30 @@ class PlinderDataset(ZarrDataset):
                 "x": combined_coords,
                 "a": combined_atom_types,
                 "c": combined_atom_charges,
+            }
+
+        if all_prot_atom_to_npnde_idxs:
+            prot_atom_to_npnde_tensor = torch.tensor(
+                all_prot_atom_to_npnde_idxs, dtype=torch.long
+            ).t()
+            edge_idxs["prot_atom_to_npnde"] = prot_atom_to_npnde_tensor
+            # covalent edge feature
+            edge_data["prot_atom_to_npnde"] = {
+                "e": torch.ones(
+                    (prot_atom_to_npnde_tensor.shape[1], 1), dtype=torch.float
+                )
+            }
+
+        if all_prot_res_to_npnde_idxs:
+            prot_res_to_npnde_tensor = torch.tensor(
+                all_prot_res_to_npnde_idxs, dtype=torch.long
+            ).t()
+            edge_idxs["prot_res_to_npnde"] = prot_res_to_npnde_tensor
+            # covalent edge feature
+            edge_data["prot_res_to_npnde"] = {
+                "e": torch.ones(
+                    (prot_res_to_npnde_tensor.shape[1], 1), dtype=torch.float
+                )
             }
 
         return node_data, edge_idxs, edge_data
@@ -599,7 +783,9 @@ class PlinderDataset(ZarrDataset):
         edge_idxs.udpate(prot_edge_idxs)
         edge_data.update(prot_edge_data)
 
-        lig_node_data, lig_edge_idxs, lig_edge_data = self.convert_ligand(system.ligand)
+        lig_node_data, lig_edge_idxs, lig_edge_data = self.convert_ligand(
+            system.ligand, system.ligand_id, system.receptor
+        )
         node_data.update(lig_node_data)
         edge_idxs.udpate(lig_edge_idxs)
         edge_data.update(lig_edge_data)

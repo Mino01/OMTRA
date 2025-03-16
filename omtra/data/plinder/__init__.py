@@ -34,7 +34,7 @@ class LigandData:
     ccd: str
     sdf: str
     linkages: Optional[List[str]] = (
-        None  # "{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}"
+        None  # "{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}__{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}"
     )
 
 
