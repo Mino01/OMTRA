@@ -3,16 +3,31 @@ import torch
 from omegaconf import DictConfig
 
 from omtra.dataset.zarr_dataset import ZarrDataset
-from omtra.constants import lig_atom_type_map, npnde_atom_type_map
+from omtra.constants import (
+    lig_atom_type_map,
+    npnde_atom_type_map,
+    aa_3to1,
+    aa_substitutions,
+    aa_atom_index,
+    residue_map,
+    protein_element_map,
+)
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
-from omtra.data.plinder import LigandData, PharmacophoreData, StructureData, SystemData
-from typing import List, Dict
+from omtra.data.plinder import (
+    LigandData,
+    PharmacophoreData,
+    StructureData,
+    SystemData,
+    BackboneData,
+)
+from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
+import numpy as np
 
 
 class PlinderDataset(ZarrDataset):
@@ -20,16 +35,22 @@ class PlinderDataset(ZarrDataset):
         self,
         split: str,
         processed_data_dir: str,
-        graphs_per_chunk: int,
-        graph_config: DictConfig,
+        graphs_per_chunk: int = 1,
+        graph_config: DictConfig = None,
+        include_pharmacophore: bool = False,
     ):
         super().__init__(split, processed_data_dir)
         self.graphs_per_chunk = graphs_per_chunk
         self.graph_config = graph_config
 
-        self.include_pharmacophore = False
+        self.include_pharmacophore = include_pharmacophore
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
+
+        self.encode_element = {
+            element: i for i, element in enumerate(protein_element_map)
+        }
+        self.encode_residue = {res: i for i, res in enumerate(residue_map)}
 
     @classproperty
     def name(cls):
@@ -327,17 +348,42 @@ class PlinderDataset(ZarrDataset):
         )
         return system
 
-    def encode_atom_names(self, atom_names: np.ndarray) -> np.ndarray:
+    def encode_atom_names(
+        self, atom_names: np.ndarray, elements: np.ndarray, res_names: np.ndarray
+    ) -> np.ndarray:
         # TODO: encode atom_names
-        pass
+        encoded_atom_names = []
+        for i, atom_name in enumerate(atom_names):
+            res_name = res_names[i]
+            res_code = aa_3to1.get(res_name) or aa_3to1.get(
+                aa_substitutions.get(res_name)
+            )
+            if not res_code:
+                encoded_atom_names.append(-1)
+                continue
+            atom_code = aa_atom_index.get(res_code).get(atom_name, -1)
+            encoded_atom_names.append(atom_code)
+        return np.array(encoded_atom_names)
 
     def encode_elements(self, elements: np.ndarray) -> np.ndarray:
         # TODO: encode elements
-        pass
+        encoded_elements = []
+        for element in elements:
+            code = self.encode_element.get(element, -1)
+            encoded_elements.append(code)
+        return np.array(encoded_elements)
 
     def encode_res_names(self, res_names: np.ndarray) -> np.ndarray:
         # TODO: encode res_names
-        pass
+        encoded_residues = []
+        for res in res_names:
+            if res not in self.encode_residue:
+                sub = aa_substitutions.get(res)
+                code = self.encode_residue.get(sub, -1)
+            else:
+                code = self.encode_residue[res]
+            encoded_residues.append(code)
+        return np.array(encoded_residues)
 
     def convert_protein(
         self,
@@ -354,16 +400,21 @@ class PlinderDataset(ZarrDataset):
         edge_data = {}
 
         prot_coords = torch.from_numpy(holo.coords).float()
-        prot_atom_names = torch.from_numpy(encode_atom_names(holo.atom_names)).long()
-        prot_elements = torch.from_numpy(encode_elements(holo.elements)).long()
+        prot_atom_names = torch.from_numpy(
+            self.encode_atom_names(holo.atom_names, holo.elements, holo.res_names)
+        ).long()
+        prot_elements = torch.from_numpy(self.encode_elements(holo.elements)).long()
         prot_res_ids = torch.from_numpy(holo.res_ids).long()
-        prot_res_names = torch.from_numpy(encode_res_names(holo.res_names)).long()
+        prot_res_names = torch.from_numpy(self.encode_res_names(holo.res_names)).long()
         prot_backbone_mask = torch.from_numpy(holo.backbone_mask).bool()
 
         link_coords = torch.from_numpy(link.coords).float()
 
         # TODO: figure out how to store chain ids
-        prot_chain_ids = torch.from_numpy(holo.chain_ids.astype(np.int64)).long()
+        offset = ord("A")
+        prot_chain_ids = torch.tensor(
+            [ord(chain_id) - offset for chain_id in holo.chain_ids], dtype=torch.long
+        )
 
         pocket_res_identifiers = set()
         for i in range(len(pocket.res_ids)):
@@ -393,13 +444,15 @@ class PlinderDataset(ZarrDataset):
         backbone_coords = torch.from_numpy(holo.backbone.coords).float()
         backbone_res_ids = torch.from_numpy(holo.backbone.res_ids).long()
         backbone_res_names = torch.from_numpy(
-            encode_res_names(holo.backbone.res_names)
+            self.encode_res_names(holo.backbone.res_names)
         ).long()
 
         # TODO: figure out how to store chain ids
-        backbone_chain_ids = torch.from_numpy(
-            holo.backbone.chain_ids.astype(np.int64)
-        ).long()
+        offset = ord("A")
+        backbone_chain_ids = torch.tensor(
+            [ord(chain_id) - offset for chain_id in holo.backbone.chain_ids],
+            dtype=torch.long,
+        )
 
         backbone_pocket_mask = torch.zeros_like(backbone_res_ids, dtype=torch.bool)
         for i in range(len(backbone_res_ids)):
@@ -530,7 +583,7 @@ class PlinderDataset(ZarrDataset):
                     prot_atom_to_lig_idxs, dtype=torch.long
                 ).t()
                 edge_idxs["prot_atom_to_lig"] = prot_atom_to_lig_tensor
-                # feature for covalent bond
+                # TODO: covalent edge feature
                 edge_data["prot_atom_to_lig"] = {
                     "e": torch.ones(
                         (prot_atom_to_lig_tensor.shape[1], 1), dtype=torch.float
@@ -542,7 +595,7 @@ class PlinderDataset(ZarrDataset):
                     prot_res_to_lig_idxs, dtype=torch.long
                 ).t()
                 edge_idxs["prot_res_to_lig"] = prot_res_to_lig_tensor
-                # feature for covalent bond
+                # TODO: covalent edge feature
                 edge_data["prot_res_to_lig"] = {
                     "e": torch.ones(
                         (prot_res_to_lig_tensor.shape[1], 1), dtype=torch.float
@@ -715,7 +768,7 @@ class PlinderDataset(ZarrDataset):
                 all_prot_atom_to_npnde_idxs, dtype=torch.long
             ).t()
             edge_idxs["prot_atom_to_npnde"] = prot_atom_to_npnde_tensor
-            # covalent edge feature
+            # TODO: covalent edge feature
             edge_data["prot_atom_to_npnde"] = {
                 "e": torch.ones(
                     (prot_atom_to_npnde_tensor.shape[1], 1), dtype=torch.float
@@ -727,7 +780,7 @@ class PlinderDataset(ZarrDataset):
                 all_prot_res_to_npnde_idxs, dtype=torch.long
             ).t()
             edge_idxs["prot_res_to_npnde"] = prot_res_to_npnde_tensor
-            # covalent edge feature
+            # TODO: covalent edge feature
             edge_data["prot_res_to_npnde"] = {
                 "e": torch.ones(
                     (prot_res_to_npnde_tensor.shape[1], 1), dtype=torch.float
@@ -754,9 +807,9 @@ class PlinderDataset(ZarrDataset):
 
         node_data["pharm"] = {"x": coords, "a": types, "v": vectors, "i": interactions}
 
-        assert self.graph_config.edges["pharm_to_pharm"]["type"] == "complete", (
-            "the following code assumes complete pharm-pharm graph"
-        )
+        # assert self.graph_config.edges["pharm_to_pharm"]["type"] == "complete", (
+        #     "the following code assumes complete pharm-pharm graph"
+        # )
 
         num_centers = coords.shape[0]
         if num_centers > 1:
@@ -766,6 +819,7 @@ class PlinderDataset(ZarrDataset):
         return node_data, edge_idxs, edge_data
 
     def convert_system(
+        self,
         system: SystemData,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
@@ -780,21 +834,21 @@ class PlinderDataset(ZarrDataset):
             system.receptor, system.link, system.pocket
         )
         node_data.update(prot_node_data)
-        edge_idxs.udpate(prot_edge_idxs)
+        edge_idxs.update(prot_edge_idxs)
         edge_data.update(prot_edge_data)
 
         lig_node_data, lig_edge_idxs, lig_edge_data = self.convert_ligand(
             system.ligand, system.ligand_id, system.receptor
         )
         node_data.update(lig_node_data)
-        edge_idxs.udpate(lig_edge_idxs)
+        edge_idxs.update(lig_edge_idxs)
         edge_data.update(lig_edge_data)
 
         npnde_node_data, npnde_edge_idxs, npnde_edge_data = self.convert_npndes(
             system.npndes
         )
         node_data.update(npnde_node_data)
-        edge_idxs.udpate(npnde_edge_idxs)
+        edge_idxs.update(npnde_edge_idxs)
         edge_data.update(npnde_edge_data)
 
         if self.include_pharmacophore:
@@ -802,19 +856,19 @@ class PlinderDataset(ZarrDataset):
                 self.convert_pharmacophore(system.pharmacophore)
             )
             node_data.update(pharm_node_data)
-            edge_idxs.udpate(pharm_edge_idxs)
+            edge_idxs.update(pharm_edge_idxs)
             edge_data.update(pharm_edge_data)
 
         return node_data, edge_idxs, edge_data
 
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
-        task_name, idx = index
-        task_class: Task = task_name_to_class[task_name]
-        self.include_pharmacophore = "pharmacophore" in task_class.modalities_present
+        # task_name, idx = index
+        # task_class: Task = task_name_to_class[task_name]
+        # self.include_pharmacophore = "pharmacophore" in task_class.modalities_present
 
         system = self.get_system(index)
 
-        node_data, edge_idxs, edge_data = convert_system(system)
+        node_data, edge_idxs, edge_data = self.convert_system(system)
 
         # TODO: things!
         g = build_complex_graph(node_data, edge_idxs, edge_data)
@@ -846,19 +900,70 @@ class PlinderDataset(ZarrDataset):
 
     def get_num_nodes(self, task: Task, start_idx, end_idx):
         # here, unlike in other places, start_idx and end_idx are
-        # indexes into the graph_lookup array, not a node/edge data array
+        # indexes into the system_lookup array, not a node/edge data array
 
-        node_types = ["lig"]
+        node_types = ["lig", "prot_atom", "prot_res", "npnde"]
         if "pharmacophore" in task.modalities_present:
             node_types.append("pharm")
 
         node_counts = []
         for ntype in node_types:
-            graph_lookup = self.slice_array(
-                f"{ntype}/node/graph_lookup", start_idx, end_idx
-            )
-            node_counts.append(graph_lookup[:, 1] - graph_lookup[:, 0])
+            if ntype == "lig":
+                counts = np.array(
+                    [
+                        row["lig_atom_end"] - row["lig_atom_start"]
+                        for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
+                            "records"
+                        )
+                    ]
+                )
+            elif ntype == "prot_atom":
+                counts = np.array(
+                    [
+                        row["rec_end"] - row["rec_start"]
+                        for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
+                            "records"
+                        )
+                    ]
+                )
+            elif ntype == "prot_res":
+                counts = np.array(
+                    [
+                        row["backbone_end"] - row["backbone_start"]
+                        for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
+                            "records"
+                        )
+                    ]
+                )
+            elif ntype == "npnde":
+                counts = []
+                for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
+                    "records"
+                ):
+                    npnde_count = 0
+                    if row["npnde_idxs"]:
+                        for npnde_idx in row["npnde_idxs"]:
+                            npnde_row = self.npnde_lookup.iloc[npnde_idx]
+                            npnde_count += (
+                                npnde_row["atom_end"] - npnde_row["atom_start"]
+                            )
+                    counts.append(npnde_count)
+                counts = np.array(counts)
+            elif ntype == "pharm":
+                counts = np.array(
+                    [
+                        row["pharm_end"] - row["pharm_start"]
+                        for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
+                            "records"
+                        )
+                    ]
+                )
+
+        node_counts.append(counts)
 
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
+
+    def get_num_edges(self, task: Task, start_idx: int, end_idx: int):
+        pass

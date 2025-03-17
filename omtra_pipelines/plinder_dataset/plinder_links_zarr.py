@@ -209,7 +209,7 @@ class PlinderLinksZarrConverter:
 
             self.system_lookup = self.root.attrs[
                 "system_lookup"
-            ]  # [{system_id, ligand_id, receptor_idx, ligand_idx, rec_start, rec_end, lig_atom_start, lig_atom_end, lig_bond_start, lig_bond_end, pharmacophore_idx, pharm_start, pharm_end, npnde_idxs, pocket_idx, pocket_start, pocket_end apo_idx, pred_idx, link_start, link_end, cif}]
+            ]  # [{system_id, ligand_id, system_idx, ligand_idx, rec_start, rec_end, backbone_start, backbone_end, lig_atom_start, lig_atom_end, lig_bond_start, lig_bond_end, pharmacophore_idx, pharm_start, pharm_end, npnde_idxs, pocket_idx, pocket_start, pocket_end, pocket_bb_start, pocket_bb_end, apo_idx, pred_idx, link_start, link_end, cif}]
             self.npnde_lookup = self.root.attrs[
                 "npnde_lookup"
             ]  # [{system_id, npnde_id, receptor_idx, npnde_idx, ccd, linkages, atom_start, atom_end, bond_start, bond_end, sdf}]

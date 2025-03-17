@@ -12,12 +12,12 @@ ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}
 
 protein_element_map = [
     "C",
-    "H",
     "O",
     "N",
     "S",
     "P",
     "F",
+    "H",
     "AS",
     "B",
     "SE",
@@ -111,7 +111,7 @@ npnde_atom_type_map = [
     "Re",
 ]
 
-res_names = [
+residue_map = [
     "004",
     "00C",
     "00S",
