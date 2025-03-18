@@ -9,12 +9,15 @@ class Modality:
     graph_entity: str
     entity_name: str
     data_key: str
-    conditional_path: str
 
     @classmethod
     def register(cls, register: Dict[str, "Modality"], **kwargs):
         """Ensures that the register key matches the name attribute when registering a Modality."""
         key = kwargs['name']
+
+        if key in register:
+            raise ValueError(f"Modality with name {key} already exists in register.")
+
         register[key] = cls(**kwargs)
 
 MODALITY_REGISTER: Dict[str, Modality] = {}

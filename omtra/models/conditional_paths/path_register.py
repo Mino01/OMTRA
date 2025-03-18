@@ -1,6 +1,6 @@
 from typing import Dict, Callable
 
-COND_PATH_REGISTER = Dict[str, Callable] = {}
+COND_PATH_REGISTER: Dict[str, Callable] = {}
 
 def register_conditional_path(name: str):
     """

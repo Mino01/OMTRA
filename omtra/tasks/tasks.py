@@ -9,7 +9,7 @@ import omtra.tasks.cond_path_collections as cpc
 
 from omtra.tasks.register import register_task
 import omtra.tasks.modalities as modal
-from omtra.tasks.modalities import Modality
+from omtra.tasks.modalities import Modality, name_to_modality
    
 class Task:
 
@@ -24,7 +24,8 @@ class Task:
     @classproperty
     def modalities_generated(self) -> List[Modality]:
         modalities = []
-        for modality in modal.MODALITY_ORDER:
+        for modality_name in modal.MODALITY_ORDER:
+            modality = name_to_modality(modality_name)
             if modality.group in self.groups_generated:
                 modalities.append(modality)
         return modalities

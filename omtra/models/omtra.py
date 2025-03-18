@@ -24,14 +24,14 @@ class OMTRA(pl.LightningModule):
       task_dataset_coupling,
       dists_file: str,
       graph_config: DictConfig,
-      conditional_path_config: DictConfig,  
+      conditional_paths: DictConfig,  
       total_loss_weights: Dict[str, float] = {},          
     ):
         super().__init__()
 
         self.dists_file = dists_file
         self.graph_config = graph_config
-        self.conditional_path_config = conditional_path_config
+        self.conditional_path_config = conditional_paths
         
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -60,14 +60,10 @@ class OMTRA(pl.LightningModule):
         dists_dict = np.load(self.dists_file)
         lig_c_idx_to_val = dists_dict['p_tcv_c_space'] # a list of unique charges that appear in the dataset
         self.n_categories_dict = {
-            'lig': {
-                'a': len(lig_atom_type_map),
-                'c': len(lig_c_idx_to_val),
-                'e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
-            },
-            'pharm': {
-                'a': len(ph_idx_to_type),
-            }
+            'lig_a': len(lig_atom_type_map),
+            'lig_c': len(lig_c_idx_to_val),
+            'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
+            'pharm_a': len(ph_idx_to_type),
         }
 
     def training_step(self, batch_data, batch_idx):
@@ -136,8 +132,8 @@ class OMTRA(pl.LightningModule):
     ):  
         # TODO: support arbitrary alpha and beta functions, independently for each modality
         modalities_generated = task_class.modalities_generated
-        alpha_t = {modality: t for modality in modalities_generated}
-        beta_t = {modality: 1-t for modality in modalities_generated}
+        alpha_t = {modality.name: t for modality in modalities_generated}
+        beta_t = {modality.name: 1-t for modality in modalities_generated}
 
         # for all modalities being generated, sample the conditional path
         conditonal_path_fns = get_conditional_path_fns(task_class, self.conditional_path_config)
@@ -145,10 +141,10 @@ class OMTRA(pl.LightningModule):
             modality: Modality = name_to_modality(modality_name)
             conditional_path_name, conditional_path_fn = conditonal_path_fns[modality_name]
 
-            data_src = g.edges if modality.graph_entity else g.nodes
+            data_src = g.edges if modality.graph_entity == 'edge' else g.nodes
             dk = modality.data_key
-            source = data_src.data[f'{dk}_0']
-            target = data_src.data[f'{dk}_1_true']
+            source = data_src[modality.entity_name].data[f'{dk}_0']
+            target = data_src[modality.entity_name].data[f'{dk}_1_true']
 
             if modality.graph_entity == 'edge':
                 conditional_path_fn = partial(conditional_path_fn, ue_mask=lig_ue_mask)
@@ -162,10 +158,10 @@ class OMTRA(pl.LightningModule):
                 batch_idxs = node_batch_idxs[modality.entity_name]
             else:
                 batch_idxs = edge_batch_idxs[modality.entity_name]
-            alpha_t_modality = alpha_t[modality_name][batch_idxs]
-            beta_t_modality = beta_t[modality_name][batch_idxs]
+            alpha_t_modality = alpha_t[modality_name][batch_idxs].unsqueeze(-1)
+            beta_t_modality = beta_t[modality_name][batch_idxs].unsqueeze(-1)
 
-            data_src.data[f'{dk}_t'] = \
+            data_src[modality.entity_name].data[f'{dk}_t'] = \
                 conditional_path_fn(source, target, alpha_t_modality, beta_t_modality)
             
         # for all modalities held fixed, convert the true values to the current time
