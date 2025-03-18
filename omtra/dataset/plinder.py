@@ -6,6 +6,7 @@ from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
+    ph_idx_to_type,
     aa_3to1,
     aa_substitutions,
     aa_atom_index,
@@ -37,11 +38,13 @@ class PlinderDataset(ZarrDataset):
         processed_data_dir: str,
         graphs_per_chunk: int = 1,
         graph_config: DictConfig = None,
+        prior_config: DictConfig,
         include_pharmacophore: bool = False,
     ):
         super().__init__(split, processed_data_dir)
         self.graphs_per_chunk = graphs_per_chunk
         self.graph_config = graph_config
+        self.prior_config = prior_config
 
         self.include_pharmacophore = include_pharmacophore
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
@@ -51,6 +54,15 @@ class PlinderDataset(ZarrDataset):
             element: i for i, element in enumerate(protein_element_map)
         }
         self.encode_residue = {res: i for i, res in enumerate(residue_map)}
+        self.n_categories_dict = {
+            'lig_a': len(lig_atom_type_map),
+            'lig_c': len(lig_c_idx_to_val),
+            'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
+            'pharm_a': len(ph_idx_to_type),
+            'prot_atom_a': len(protein_atom_map),
+            'prot_atom_e': len(protein_element_map),
+            'prot_res_a': len(residue_map),
+        }
 
     @classproperty
     def name(cls):
@@ -343,7 +355,7 @@ class PlinderDataset(ZarrDataset):
             pocket=pocket,
             npndes=npndes,
             link_type=link_type,
-            link_id=system_info["link_id"],
+            link_id=system_info["link_id"] if link_type else None,
             link=apo if apo else pred,
         )
         return system
@@ -384,11 +396,23 @@ class PlinderDataset(ZarrDataset):
                 code = self.encode_residue[res]
             encoded_residues.append(code)
         return np.array(encoded_residues)
+    
+    def get_link_coords(
+        self,
+        link: StructureData,
+        modality_name: str,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if modality_name == 'prot_atom':
+            x_0 = torch.from_numpy(link.coords).float()
+        elif modality_name == 'prot_res':
+            x_0 = torch.from_numpy(link.backbone.coords).float()
+        else:
+            raise NotImplementedError(f"{modality_name} does not have linked structure coords")
+        return x_0
 
     def convert_protein(
         self,
         holo: StructureData,
-        link: StructureData,
         pocket: StructureData,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
@@ -407,8 +431,6 @@ class PlinderDataset(ZarrDataset):
         prot_res_ids = torch.from_numpy(holo.res_ids).long()
         prot_res_names = torch.from_numpy(self.encode_res_names(holo.res_names)).long()
         prot_backbone_mask = torch.from_numpy(holo.backbone_mask).bool()
-
-        link_coords = torch.from_numpy(link.coords).float()
 
         # TODO: figure out how to store chain ids
         offset = ord("A")
@@ -431,7 +453,6 @@ class PlinderDataset(ZarrDataset):
 
         node_data["prot_atom"] = {
             "x_1_true": prot_coords,
-            "x_0": link_coords,
             "a": prot_atom_names,
             "e": prot_elements,
             "res_id": prot_res_ids,
@@ -461,13 +482,10 @@ class PlinderDataset(ZarrDataset):
             if (chain_id, res_id) in pocket_res_identifiers:
                 backbone_pocket_mask[i] = True
 
-        link_backbone_coords = torch.from_numpy(link.backbone.coords).float()
-
         node_data["prot_res"] = {
             "x_1_true": backbone_coords,
-            "x_0": link_backbone_coords,
             "res_id": backbone_res_ids,
-            "res_name": backbone_res_names,
+            "a": backbone_res_names,
             "chain_id": backbone_chain_ids,
             "pocket_mask": backbone_pocket_mask,
         }
@@ -871,7 +889,7 @@ class PlinderDataset(ZarrDataset):
         edge_data = {}
 
         prot_node_data, prot_edge_idxs, prot_edge_data = self.convert_protein(
-            system.receptor, system.link, system.pocket
+            system.receptor, system.pocket
         )
         node_data.update(prot_node_data)
         edge_idxs.update(prot_edge_idxs)
@@ -913,6 +931,38 @@ class PlinderDataset(ZarrDataset):
 
         # TODO: things!
         g = build_complex_graph(node_data, edge_idxs, edge_data)
+
+        priors_fns = get_prior(task_class, self.prior_config, train=True)
+
+        # sample priors
+        for modality_name in priors_fns:
+            prior_name, prior_func = priors_fns[modality_name] # get prior name and function
+            modality = name_to_modality(modality_name) # get the modality object
+
+            # fetch the target data from the graph object
+            g_data_loc = g.nodes if modality.graph_entity == 'node' else g.edges
+            
+            if 'apo' in prior_name:
+                target_data = self.get_link_coords(system.link, modality_name)
+            else:
+                target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
+
+            # if the prior is masked, we need to pass the number of categories for this modality to the prior function
+            if prior_name == 'masked':
+                prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict[modality_name])
+
+            # draw a sample from the prior
+            prior_sample = prior_func(target_data)
+
+            # for edge features, make sure upper and lower triangle are the same
+            # TODO: this logic may change if we decide to do something other fully-connected lig-lig edges
+            if modality.graph_entity == 'edge':
+                upper_edge_mask = torch.zeros_like(target_data, dtype=torch.bool)
+                upper_edge_mask[:target_data.shape[0]//2] = 1
+                prior_sample[~upper_edge_mask] = prior_sample[upper_edge_mask]
+
+            # add the prior sample to the graph
+            g_data_loc[modality.entity_name].data[f'{modality.data_key}_0'] = prior_sample
 
         return g
 

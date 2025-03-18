@@ -68,3 +68,11 @@ def fixed_prior(x1: torch.Tensor):
     Generate a fixed prior feature.
     """
     return x1.clone()
+
+@register_train_prior("apo_exp")
+@register_train_prior("apo_pred")
+def unbound_prior(x0: torch.Tensor):
+    """
+    Generate a prior from unbound structure
+    """
+    return x0.clone()
