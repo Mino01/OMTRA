@@ -899,6 +899,8 @@ class SystemProcessor:
             str(system_structure.protein_path),
             chain_mapping,
         )
+        if not receptor_data:
+            return None
 
         # Process pockets
         pockets_data = {}
@@ -988,7 +990,7 @@ class SystemProcessor:
             )
             if systems_data:
                 return {
-                    system_id: systems_data,
+                    "systems_list": systems_data,
                     "links": False,
                     "annotation": self.system.system,
                 }

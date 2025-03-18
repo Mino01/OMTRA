@@ -341,10 +341,19 @@ def check_storage(zarr_path):
         elif system.link_type == "pred":
             processor = SystemProcessor(system_id=system.system_id, link_type="pred")
             result = processor.process_system()
+        else:
+            processor = SystemProcessor(system_id=system.system_id, link_type=None)
+            result = processor.process_system()
         actual_system = None
-        for system_data in result[system.link_type][link_id]:
-            if system_data.ligand_id == ligand_id:
-                actual_system = system_data
+
+        if system.link_type:
+            for system_data in result[system.link_type][link_id]:
+                if system_data.ligand_id == ligand_id:
+                    actual_system = system_data
+        else:
+            for system_data in result["systems_list"]:
+                if system_data.ligand_id == ligand_id:
+                    actual_system = system_data
         assert actual_system is not None
         check_system(system, actual_system)
         print(f"Passed")
