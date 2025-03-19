@@ -107,13 +107,13 @@ class PlinderZarrRetriever:
             system_info["pocket_bb_end"],
         )
 
-        link_start, link_end = system_info["link_start"], system_info["link_end"]
-        link_bb_start, link_bb_end = (
-            system_info["link_bb_start"],
-            system_info["link_bb_end"],
-        )
-
         link_type = system_info["link_type"]
+        if link_type:
+            link_start, link_end = system_info["link_start"], system_info["link_end"]
+            link_bb_start, link_bb_end = (
+                system_info["link_bb_start"],
+                system_info["link_bb_end"],
+            )
 
         backbone = BackboneData(
             coords=self.root["receptor"]["backbone_coords"][
@@ -280,7 +280,7 @@ class PlinderZarrRetriever:
             pocket=pocket,
             npndes=npndes,
             link_type=link_type,
-            link_id=system_info["link_id"],
+            link_id=system_info["link_id"] if link_type else None,
             link=apo if apo else pred,
         )
         return system
