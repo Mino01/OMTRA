@@ -127,8 +127,11 @@ class ExpApoConditionedLigandDocking(Task):
     groups_generated = ['ligand_structure', 'protein_structure']
 
     priors = deepcopy(pc.ligand_conformer)
-    priors['prot_atom'] = {
+    priors['prot_atom_x'] = {
         'type': 'apo_exp',
+    }
+    priors['npnde_x'] = { 
+        'type': 'fixed'
     }
 
 @register_task("predapo_conditioned_ligand_docking")

@@ -19,6 +19,7 @@ from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
 from omtra.priors.prior_factory import get_prior
+from omtra.tasks.modalities import name_to_modality
 from omtra.data.plinder import (
     LigandData,
     PharmacophoreData,
@@ -394,7 +395,7 @@ class PlinderDataset(ZarrDataset):
         link: StructureData,
         modality_name: str,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if modality_name == 'prot_atom':
+        if modality_name == 'prot_atom_x':
             x_0 = torch.from_numpy(link.coords).float()
         elif modality_name == 'prot_res':
             x_0 = torch.from_numpy(link.backbone.coords).float()
@@ -485,7 +486,7 @@ class PlinderDataset(ZarrDataset):
         # NOTE: change later?
         edge_idxs["prot_atom_to_prot_atom"] = edge_builders.radius_graph(
             prot_coords, 
-            radius=5.0, 
+            radius=4.5, 
             max_num_neighbors=1000
         )
 
@@ -518,15 +519,15 @@ class PlinderDataset(ZarrDataset):
 
         node_data = {
             "lig": {
-                "x": lig_x,
-                "a": lig_a,
-                "c": lig_c,
+                "x_1_true": lig_x,
+                "a_1_true": lig_a,
+                "c_1_true": lig_c,
             }
         }
 
         edge_data = {
             "lig_to_lig": {
-                "e": lig_e,
+                "e_1_true": lig_e,
             }
         }
 
@@ -602,7 +603,7 @@ class PlinderDataset(ZarrDataset):
                 edge_idxs["prot_atom_to_lig"] = prot_atom_to_lig_tensor
                 # TODO: covalent edge feature
                 edge_data["prot_atom_to_lig"] = {
-                    "e": torch.ones(
+                    "e_1_true": torch.ones(
                         (prot_atom_to_lig_tensor.shape[1], 1), dtype=torch.float
                     )
                 }
@@ -614,7 +615,7 @@ class PlinderDataset(ZarrDataset):
                 edge_idxs["prot_res_to_lig"] = prot_res_to_lig_tensor
                 # TODO: covalent edge feature
                 edge_data["prot_res_to_lig"] = {
-                    "e": torch.ones(
+                    "e_1_true": torch.ones(
                         (prot_res_to_lig_tensor.shape[1], 1), dtype=torch.float
                     )
                 }
@@ -637,7 +638,7 @@ class PlinderDataset(ZarrDataset):
         pocket_mask = prot_node_data["pocket_mask"]
         pocket_atom_indices = torch.nonzero(pocket_mask, as_tuple=True)[0]
         
-        num_lig_atoms = lig_node_data["x"].shape[0]
+        num_lig_atoms = lig_node_data["x_1_true"].shape[0]
         
         prot_to_lig_edges = []
         
@@ -663,9 +664,10 @@ class PlinderDataset(ZarrDataset):
         Dict[str, torch.Tensor],
         Dict[str, Dict[str, torch.Tensor]],
     ]:
-        node_data = {}
-        edge_idxs = {}
-        edge_data = {}
+        node_data, edge_data, edge_idxs = {}, {}, {}
+        node_data["npnde"] = {"x_1_true": torch.empty(0), "a_1_true": torch.empty(0), "c_1_true": torch.empty(0)}
+        edge_data["npnde_to_npnde"] = {"e_1_true": torch.empty(0)}
+        edge_idxs["npnde_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
 
         if not npndes:
             return node_data, edge_idxs, edge_data
@@ -801,16 +803,16 @@ class PlinderDataset(ZarrDataset):
                 combined_bond_indices,
             )
 
-            node_data["npnde"] = {"x": npnde_x, "a": npnde_a, "c": npnde_c}
+            node_data["npnde"] = {"x_1_true": npnde_x, "a_1_true": npnde_a, "c_1_true": npnde_c}
 
-            edge_data["npnde_to_npnde"] = {"e": npnde_e}
+            edge_data["npnde_to_npnde"] = {"e_1_true": npnde_e}
 
             edge_idxs["npnde_to_npnde"] = npnde_edge_idxs
         else:
             node_data["npnde"] = {
-                "x": combined_coords,
-                "a": combined_atom_types,
-                "c": combined_atom_charges,
+                "x_1_true": combined_coords,
+                "a_1_true": combined_atom_types,
+                "c_1_true": combined_atom_charges,
             }
 
         if all_prot_atom_to_npnde_idxs:
@@ -820,7 +822,7 @@ class PlinderDataset(ZarrDataset):
             edge_idxs["prot_atom_to_npnde"] = prot_atom_to_npnde_tensor
             # TODO: covalent edge feature
             edge_data["prot_atom_to_npnde"] = {
-                "e": torch.ones(
+                "e_1_true": torch.ones(
                     (prot_atom_to_npnde_tensor.shape[1], 1), dtype=torch.float
                 )
             }
@@ -832,7 +834,7 @@ class PlinderDataset(ZarrDataset):
             edge_idxs["prot_res_to_npnde"] = prot_res_to_npnde_tensor
             # TODO: covalent edge feature
             edge_data["prot_res_to_npnde"] = {
-                "e": torch.ones(
+                "e_1_true": torch.ones(
                     (prot_res_to_npnde_tensor.shape[1], 1), dtype=torch.float
                 )
             }
@@ -855,7 +857,7 @@ class PlinderDataset(ZarrDataset):
         vectors = torch.from_numpy(pharmacophore.vectors).float()
         interactions = torch.from_numpy(pharmacophore.interactions).bool()
 
-        node_data["pharm"] = {"x": coords, "a": types, "v": vectors, "i": interactions}
+        node_data["pharm"] = {"x_1_true": coords, "a_1_true": types, "v_1_true": vectors, "i_1_true": interactions}
 
         # assert self.graph_config.edges["pharm_to_pharm"]["type"] == "complete", (
         #     "the following code assumes complete pharm-pharm graph"
@@ -916,9 +918,7 @@ class PlinderDataset(ZarrDataset):
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)
-        print(task_class)
-        for modality in task_class.modalities_generated:
-            print(modality, modality.name)
+
         system = self.get_system(idx)
 
         node_data, edge_idxs, edge_data = self.convert_system(system)
@@ -939,6 +939,7 @@ class PlinderDataset(ZarrDataset):
             if 'apo' in prior_name:
                 target_data = self.get_link_coords(system.link, modality_name)
             else:
+                print(modality.entity_name)
                 target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
 
             # if the prior is masked, we need to pass the number of categories for this modality to the prior function

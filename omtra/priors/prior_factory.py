@@ -19,12 +19,12 @@ def get_prior(task_cls, config_prior=None, train=False) -> dict:
     for modality in task_cls.modalities_generated:
         try:
             prior_fn_key = config_prior[task_name][modality.name]['type']
-        except KeyError:
+        except (KeyError, TypeError): # NOTE: changed to handle NoneType config_prior
             prior_fn_key = task_cls.priors[modality.name]['type']
 
         try:
             prior_params = config_prior[task_name][modality.name]['params']
-        except KeyError:
+        except (KeyError, TypeError): # NOTE: changed to handle NoneType config_prior
             prior_params = task_cls.priors[modality.name].get('params', {})
 
         prior_fn = register[prior_fn_key]

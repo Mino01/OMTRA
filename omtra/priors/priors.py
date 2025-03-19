@@ -70,10 +70,18 @@ def fixed_prior(x1: torch.Tensor):
     return x1.clone()
 
 
-@register_train_prior("apo_pred")
 @register_train_prior("apo_exp")
-def unbound_prior(x0: torch.Tensor):
+def exp_prior(x0: torch.Tensor):
     """
-    Generate a prior from unbound structure
+    Generate a prior from unbound experimental structure
     """
     return x0.clone()
+
+@register_train_prior("apo_pred")
+def pred_prior(x0: torch.Tensor):
+    """
+    Generate a prior from AlphaFold predicted unbound structure
+    """
+    return x0.clone()
+
+
