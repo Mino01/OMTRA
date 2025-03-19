@@ -18,6 +18,7 @@ from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
+from omtra.priors.prior_factory import get_prior
 from omtra.data.plinder import (
     LigandData,
     PharmacophoreData,
@@ -56,7 +57,8 @@ class PlinderDataset(ZarrDataset):
         self.encode_atom = {atom: i for i, atom in enumerate(protein_atom_map)}
         self.n_categories_dict = {
             'lig_a': len(lig_atom_type_map),
-            'lig_c': len(lig_c_idx_to_val),
+            # 'lig_c': len(lig_c_idx_to_val),
+            'lig_c': 10, # TODO: change this later just for debugging
             'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
             'pharm_a': len(ph_idx_to_type),
         }
@@ -360,7 +362,6 @@ class PlinderDataset(ZarrDataset):
     def encode_atom_names(
         self, atom_names: np.ndarray, elements: np.ndarray, res_names: np.ndarray
     ) -> np.ndarray:
-        # TODO: encode atom_names
         encoded_atom_names = []
         for i, atom_name in enumerate(atom_names):
             if atom_name in self.encode_atom:
@@ -371,7 +372,6 @@ class PlinderDataset(ZarrDataset):
         return np.array(encoded_atom_names)
 
     def encode_elements(self, elements: np.ndarray) -> np.ndarray:
-        # TODO: encode elements
         encoded_elements = []
         for element in elements:
             code = self.encode_element[element]
@@ -379,7 +379,6 @@ class PlinderDataset(ZarrDataset):
         return np.array(encoded_elements)
 
     def encode_res_names(self, res_names: np.ndarray) -> np.ndarray:
-        # TODO: encode res_names
         encoded_residues = []
         for res in res_names:
             if res not in self.encode_residue:
@@ -917,8 +916,10 @@ class PlinderDataset(ZarrDataset):
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)
-
-        system = self.get_system(index)
+        print(task_class)
+        for modality in task_class.modalities_generated:
+            print(modality, modality.name)
+        system = self.get_system(idx)
 
         node_data, edge_idxs, edge_data = self.convert_system(system)
 

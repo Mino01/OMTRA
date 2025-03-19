@@ -69,8 +69,9 @@ def fixed_prior(x1: torch.Tensor):
     """
     return x1.clone()
 
-@register_train_prior("apo_exp")
+
 @register_train_prior("apo_pred")
+@register_train_prior("apo_exp")
 def unbound_prior(x0: torch.Tensor):
     """
     Generate a prior from unbound structure
