@@ -38,7 +38,7 @@ class PlinderDataset(ZarrDataset):
         processed_data_dir: str,
         graphs_per_chunk: int = 1,
         graph_config: DictConfig = None,
-        prior_config: DictConfig,
+        prior_config: DictConfig = None,
         include_pharmacophore: bool = False,
     ):
         super().__init__(split, processed_data_dir)
@@ -59,9 +59,6 @@ class PlinderDataset(ZarrDataset):
             'lig_c': len(lig_c_idx_to_val),
             'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
             'pharm_a': len(ph_idx_to_type),
-            'prot_atom_a': len(protein_atom_map),
-            'prot_atom_e': len(protein_element_map),
-            'prot_res_a': len(residue_map),
         }
 
     @classproperty
