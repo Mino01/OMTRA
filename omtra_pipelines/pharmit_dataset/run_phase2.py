@@ -20,19 +20,24 @@ from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.graph import build_lookup_table
 import multiprocessing
 
+from omtra.constants import lig_atom_type_map
+
 from omtra_pipelines.pharmit_dataset.guts.phase2 import *
 
 
 def parse_args():
     p = argparse.ArgumentParser(description='Build Zarr store')
-    p.add_argument('--output_dir', type=Path, help='Directory for store.',  default=Path('./outputs/'))
-    p.add_argument('--store_name', type=Path, help='Name of store.',  default=Path('store.zarr'))
+    p.add_argument('--output_dir', type=Path, help='Directory for store.',  default=Path('./outputs/')) # where to read chunk data from
+    p.add_argument('--store_name', type=Path, help='Name of store.',  default=Path('store.zarr')) # name of the store file
 
     p.add_argument('--n_cpus', type=int, default=1, help='Number of CPUs to use for parallel processing.')
     p.add_argument('--n_chunks_zarr', type=int, default=1000, help='Number of chunks for zarr arrays.')
     p.add_argument('--n_chunks_process', type=int, default=None, help='Number of chunks to process, just for debugging.')
     p.add_argument('--overwrite', action='store_true', help='Overwrite existing store.')
-    p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"])
+    p.add_argument('--seed', type=int, default=42, help='Random seed for shuffling.')
+    
+    p.add_argument('--store_dir', type=Path, help='Directory for store.',  default=None) # where to write the store
+    # p.add_argument('--atom_type_map', type=list, default=["C", "H", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B"])
 
     args = p.parse_args()
     return args
@@ -55,7 +60,13 @@ def get_all_locks(arr_name: str, zchunk_ids: List[int]):
     acquired_locks = []
     try:
         for lock_id in sorted_ids:
-            lock = global_lock_register[arr_name][lock_id]
+            try:
+                lock = global_lock_register[arr_name][lock_id]
+            except IndexError as e:
+                print(f"Error: lock_id {lock_id} out of range for array {arr_name}")
+                print(global_lock_register[arr_name])
+                print(sorted_ids)
+                raise e
             lock.acquire()  # Blocking call to acquire the lock.
             acquired_locks.append(lock)
         # print(f"Acquired locks for {arr_name} chunks ids: {sorted_ids}")
@@ -179,7 +190,7 @@ def run_parallel(n_cpus: int, file_crawler: ChunkInfoManager, store_path: Path, 
     total_tasks = len(file_crawler)
     pbar = tqdm(total=total_tasks, desc="Processing", unit="chunks")
 
-    with Pool(processes=n_cpus, initializer=init_worker, initargs=(locks, store_path)) as pool:
+    with Pool(processes=n_cpus, initializer=init_worker, initargs=(locks, store_path), maxtasksperchild=10) as pool:
         for pchunk_idx, row_info in enumerate(file_crawler):
 
 
@@ -213,20 +224,27 @@ def build_lock_register(file_crawler: ChunkInfoManager, zstore: ZarrStore):
 if __name__ == '__main__':
     args = parse_args()
 
+    # TODO: random seeds
+
     # Set the multiprocessing start method to 'spawn'
     multiprocessing.set_start_method('spawn', force=True)
 
     chunk_info_manager = ChunkInfoManager(
                                output_dir=args.output_dir, 
-                               atom_map=args.atom_type_map,
+                               atom_map=lig_atom_type_map,
                                n_chunks_process=args.n_chunks_process,
                                shuffle=True
                                )
 
     # create zarr store
-    zarr_dir = args.output_dir / 'phase2' 
-    zarr_dir.mkdir(parents=True, exist_ok=True)
-    store_path = zarr_dir / args.store_name
+    if args.store_dir:
+        zarr_dir = args.store_dir
+        zarr_dir.mkdir(parents=True, exist_ok=True)
+        store_path = zarr_dir / args.store_name
+    else:
+        zarr_dir = args.output_dir / 'phase2' 
+        zarr_dir.mkdir(parents=True, exist_ok=True)
+        store_path = zarr_dir / args.store_name
 
     zstore = ZarrStore(store_path, chunk_info_manager.totals, args.n_chunks_zarr, overwrite=args.overwrite)
 

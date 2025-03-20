@@ -1,0 +1,18 @@
+## Do not modify ##
+# This will be used to initialize the MultiTaskDataModule()
+# the parameter single_dataset_configs will be set in the task_group
+_target_: omtra.dataset.data_module.MultiTaskDataModule
+
+# tasks: ${task_group.tasks}
+
+task_phases: ${task_group.task_phases}
+dataset_task_coupling: ${task_group.dataset_task_coupling}
+
+
+dataset_config:
+  single_dataset_configs: {}
+
+prior_config: ${prior}
+graph_config: ${graph}
+edges_per_batch: ${edges_per_batch}
+num_workers: ${num_workers}
