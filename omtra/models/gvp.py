@@ -247,6 +247,9 @@ class HeteroGVPConv(nn.Module):
         self.dropout_rate = dropout
         self.message_norm = message_norm
 
+        if not self.edge_feat_size:
+            self.edge_feat_size = {etype: 0 for etype in self.edge_types}
+
         # dims for message reduction and also attention
         self.s_message_dim = s_message_dim
         self.v_message_dim = v_message_dim
