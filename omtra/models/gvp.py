@@ -319,7 +319,7 @@ class HeteroGVPConv(nn.Module):
             for etype in (
                 self.edge_types
             ):  # TODO: confirm that attention should be unique to edge type
-                self.att_weight_project[etype] = nn.Sequential(
+                self.att_weight_projection[etype] = nn.Sequential(
                     nn.Linear(extra_scalar_feats, extra_scalar_feats, bias=False),
                     nn.LayerNorm(extra_scalar_feats),
                 )
@@ -370,7 +370,7 @@ class HeteroGVPConv(nn.Module):
 
                 if i == 0:
                     dim_vectors_in += 1
-                    dim_feats_in += rbf_dim + edge_feat_size.get(etype, 0)
+                    dim_feats_in += rbf_dim + self.edge_feat_size.get(etype, 0)
                 else:
                     # if not first layer, input size is the output size of the previous layer
                     dim_feats_in = dim_feats_out
