@@ -7,6 +7,7 @@ import scipy
 from typing import List
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.utils.embedding import get_time_embedding
+from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype
 from omtra.constants import (
     lig_atom_type_map,
