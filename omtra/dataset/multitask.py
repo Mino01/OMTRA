@@ -64,12 +64,13 @@ class MultitaskDataSet(torch.utils.data.Dataset):
             if dataset_name == 'plinder':
                 plinder_dataset_objects = {}
                 for plinder_link_name in plinder_link_versions:
-                    plinder_dataset_objects[plinder_link_name] = dataset_class(
-                        link_version=plinder_link_name,
-                        split=self.split, 
-                        graph_config=self.graph_config,
-                        prior_config=self.prior_config,
-                        **single_dataset_config)
+                    if plinder_link_name:
+                        plinder_dataset_objects[plinder_link_name] = dataset_class(
+                            link_version=plinder_link_name,
+                            split=self.split, 
+                            graph_config=self.graph_config,
+                            prior_config=self.prior_config,
+                            **single_dataset_config)
                 self.datasets[dataset_name] = plinder_dataset_objects
             else:
                 self.datasets[dataset_name] = dataset_class(

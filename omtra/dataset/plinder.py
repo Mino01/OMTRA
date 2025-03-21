@@ -13,7 +13,7 @@ from omtra.constants import (
     protein_atom_map,
 )
 from omtra.data.graph import build_complex_graph
-from omtra.data.graph import edge_builders
+from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
@@ -44,7 +44,8 @@ class PlinderDataset(ZarrDataset):
         prior_config: Optional[DictConfig] = None,
         include_pharmacophore: bool = False,
     ):
-        super().__init__(split, processed_data_dir)
+        super().__init__(split, f"{processed_data_dir}/{link_version}" if link_version else f"{processed_data_dir}/no_links")
+        self.link_version = link_version
         self.graphs_per_chunk = graphs_per_chunk
         self.graph_config = graph_config
         self.prior_config = prior_config
@@ -125,36 +126,38 @@ class PlinderDataset(ZarrDataset):
             self.system_lookup["system_idx"] == index
         ].iloc[0]
 
-        rec_start, rec_end = system_info["rec_start"], system_info["rec_end"]
+        rec_start, rec_end = int(system_info["rec_start"]), int(system_info["rec_end"])
         backbone_start, backbone_end = (
-            system_info["backbone_start"],
-            system_info["backbone_end"],
+            int(system_info["backbone_start"]),
+            int(system_info["backbone_end"]),
         )
 
         lig_atom_start, lig_atom_end = (
-            system_info["lig_atom_start"],
-            system_info["lig_atom_end"],
+            int(system_info["lig_atom_start"]),
+            int(system_info["lig_atom_end"]),
         )
         lig_bond_start, lig_bond_end = (
-            system_info["lig_bond_start"],
-            system_info["lig_bond_end"],
+            int(system_info["lig_bond_start"]),
+            int(system_info["lig_bond_end"]),
         )
 
         pocket_start, pocket_end = (
-            system_info["pocket_start"],
-            system_info["pocket_end"],
+            int(system_info["pocket_start"]),
+            int(system_info["pocket_end"]),
         )
         pocket_bb_start, pocket_bb_end = (
-            system_info["pocket_bb_start"],
-            system_info["pocket_bb_end"],
+            int(system_info["pocket_bb_start"]),
+            int(system_info["pocket_bb_end"]),
         )
 
-        link_start, link_end = system_info["link_start"], system_info["link_end"]
-        link_bb_start, link_bb_end = (
-            system_info["link_bb_start"],
-            system_info["link_bb_end"],
-        )
         link_type = system_info["link_type"]
+        if link_type:
+            link_start, link_end = int(system_info["link_start"]), int(system_info["link_end"])
+            link_bb_start, link_bb_end = (
+                int(system_info["link_bb_start"]),
+                int(system_info["link_bb_end"]),
+            )
+        
 
         backbone = BackboneData(
             coords=self.slice_array(
@@ -165,7 +168,7 @@ class PlinderDataset(ZarrDataset):
             ),
             res_names=self.slice_array(
                 "receptor/backbone_res_names", backbone_start, backbone_end
-            ).astype(str),
+            ),
             chain_ids=self.slice_array(
                 "receptor/backbone_chain_ids", backbone_start, backbone_end
             ).astype(str),
@@ -971,7 +974,7 @@ class PlinderDataset(ZarrDataset):
 
         return g
 
-    def retrieve_graph_chunks(self, apo_systems: bool = False):
+    def retrieve_graph_chunks(self, frac_start, frac_end, apo_systems: bool = False):
         """
         This dataset contains len(self) examples. We divide all samples (or, graphs) into separate chunk.
         We call these "graph chunks"; this is not the same thing as chunks defined in zarr arrays.
@@ -982,9 +985,9 @@ class PlinderDataset(ZarrDataset):
 
         n_chunks = n_even_chunks + int(n_graphs_in_last_chunk > 0)
 
-        raise NotImplementedError(
-            "need to build capability to modify chunks based on whether or not the task uses the apo state"
-        )
+        # raise NotImplementedError(
+        #     "need to build capability to modify chunks based on whether or not the task uses the apo state"
+        # )
 
         # construct a tensor containing the index ranges for each chunk
         chunk_index = torch.zeros(n_chunks, 2, dtype=torch.int64)
@@ -994,7 +997,7 @@ class PlinderDataset(ZarrDataset):
 
         return chunk_index
 
-    def get_num_nodes(self, task: Task, start_idx, end_idx):
+    def get_num_nodes(self, task: Task, start_idx, end_idx, per_ntype=False):
         # here, unlike in other places, start_idx and end_idx are
         # indexes into the system_lookup array, not a node/edge data array
 
@@ -1056,10 +1059,60 @@ class PlinderDataset(ZarrDataset):
                 )
 
         node_counts.append(counts)
+        
+        if per_ntype:
+            num_nodes_dict = {ntype: ncount for ntype, ncount in zip(node_types, node_counts)}
+            return num_nodes_dict
 
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
+    
+    @functools.lru_cache(1024*1024)
+    def get_num_edges(self, task: Task, start_idx, end_idx):
+        # here, unlike in other places, start_idx and end_idx are 
+        # indexes into the graph_lookup array, not a node/edge data array
 
-    def get_num_edges(self, task: Task, start_idx: int, end_idx: int):
-        pass
+        # get number of nodes in each graph, per node type
+        n_nodes_dict = self.get_num_nodes(task, start_idx, end_idx, per_ntype=True)
+        node_types, n_nodes_per_type = zip(*n_nodes_dict.items())
+
+        # evaluate same-ntype edges
+        n_edges_total = torch.zeros(end_idx - start_idx, dtype=torch.int64)
+        for ntype, n_nodes in zip(node_types, n_nodes_per_type):
+            etype = f'{ntype}_to_{ntype}'
+            n_edges = approx_n_edges(etype, self.graph_config, n_nodes_dict)
+            n_edges_total += n_edges
+
+        # cover cross-ntype edges
+        # there are many problems in how we do this; the user needs to specify configs
+        # exactly right or we could end up miscounting edges here, so...tbd
+        # TODO: lig_to_pharm symmetry may be less desireable than pharm_to_lig symmetry
+        if len(node_types) == 2:
+            assert 'lig_to_pharm' in self.graph_config.symmetric_etypes
+            n_edges = approx_n_edges('lig_to_pharm', self.graph_config, n_nodes_dict)
+            n_edges_total += n_edges*2
+            
+
+        return n_edges_total
+
+    def get_num_edges1(self, task: Task, start_idx: int, end_idx: int):
+        edge_count = 0
+        if "pharmacophore" in task.groups_present:
+            for i in range(start_idx, end_idx):
+                pharm_row = self.system_lookup.iloc[i]
+                pharm_count = pharm_row["pharm_end"] - pharm_row["pharm_start"]
+                edge_count += pharm_count * pharm_count
+        for i in range(start_idx, end_idx):
+            row = self.system_lookup.iloc[i]
+            lig_count = row["lig_atom_end"] - row["lig_atom_start"]
+            edge_count += lig_count * lig_count
+            
+            if row["npnde_idxs"]:
+                for npnde_idx in row["npnde_idxs"]:
+                    npnde_row = self.npnde_lookup.iloc[npnde_idx]
+                    npnde_count = npnde_row["bond_end"] - npnde_row["bond_start"]
+                    edge_count += npnde_count
+                    
+        return edge_count
+        
