@@ -425,12 +425,42 @@ class EndpointVectorField(nn.Module):
             apply_softmax: bool = False,
             remove_com: bool = False,
         ):
-            # TODO: adapt flowmol denoise_graph for hetero version
-            pass
+            
+            x_diff, d = self.precompute_distances(g)
+            for recycle_idx in range(self.n_recycles):
+                for conv_idx, conv in enumerate(self.conv_layers):
+
+                    # perform a single convolution which updates node scalar and vector features (but not positions)
+                    node_scalar_features, node_vec_features = conv(g, 
+                            scalar_feats=node_scalar_features, 
+                            coord_feats=node_positions,
+                            vec_feats=node_vec_features,
+                            edge_feats=edge_features,
+                            x_diff=x_diff,
+                            d=d
+                    )
+            # TODO: adapt rest of  flowmol denoise_graph for hetero version
+            raise NotImplementedError("denoise_graph not implemented yet")
 
         def precompute_distances(self, g: dgl.DGLGraph, node_positions=None):
             # TODO: adapt flowmol precompute_distances for hetero version
-            pass
+            """Precompute the pairwise distances between all nodes in the graph."""
+            x_diff = {}
+            d = {}
+            with g.local_scope():
+                for ntype in self.node_types:
+                    if node_positions is None:
+                        g.nodes[ntype].data['x_d'] = g.nodes[ntype].data['x_t']
+                    else:
+                        g.nodes[ntype].data['x_d'] = node_positions[ntype]
+                        
+                for etype in self.edge_types:
+                    g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
+                    dij = _norm_no_nan(g.edges[etype].data['x_diff'], keepdims=True) + 1e-8
+                    x_diff[etype] = g.edges[etype].data['x_diff'] / dij
+                    d[etype] = _rbf(dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim)
+        
+            return x_diff, d
 
         def integrate(self, g: dgl.DGLGraph):
             # TODO: adapt flowmol integrate for hetero version
