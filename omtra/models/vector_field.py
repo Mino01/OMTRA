@@ -104,55 +104,40 @@ class EndpointVectorField(nn.Module):
             self.continuous_inv_temp_schedule, self.continouts_inv_temp_max
         )
 
-        self.n_cat_feats = {  # number of possible values for each categorical variable (not including mask tokens in the case of CTMC)
-            "lig_a": self.n_lig_atom_types,
-            "lig_c": self.n_charges,
-            "lig_e": self.n_bond_types,
+        self.n_cat_feats = {  # number of possible values for each categorical variable (+1 for mask token for generated modalities)
+            "lig_a": self.n_lig_atom_types + 1,
+            "lig_c": self.n_charges + 1,
+            "lig_to_lig": self.n_bond_types + 1,
             "npnde_a": self.n_npnde_atom_types,
             "npnde_c": self.n_charges,
-            "npnde_e": self.n_bond_types,
-            "pharm_a": self.n_pharm_types,
-            "pharm_c": 0,
-            "pharm_e": 0,
+            "npnde_to_npnde": self.n_bond_types,
+            "pharm_a": self.n_pharm_types + 1,
             "prot_atom_a": self.n_protein_atom_types,
             "prot_atom_e": self.n_protein_element_types,
-            "prot_atom_edge": self.n_cross_edge_types,
             "prot_atom_r": self.n_protein_residue_types,
+            "prot_res_r": self.n_protein_residue_types,
+            "prot_atom_to_lig": self.n_cross_edge_types,
+            "prot_atom_to_npnde": self.n_cross_edge_types,
+            "prot_res_to_lig": self.n_cross_edge_types,
+            "prot_res_to_npnde": self.n_cross_edge_types,
         }
 
-        self.token_dims = {
-            cat_feat: token_dim
-            for cat_feat, n_unique in self.n_cat_feats.items()
-            if n_unique > 0
-        }
-
-        mask_feats = {"lig_a", "lig_c", "lig_e", "pharm_a"}
-        n_mask_feats = int(has_mask)
-
-        # create token embeddings as identity layers
-        # for non-CTMC parameterizations we need to repersent
-        # categorical features as continuous vectors
-        # but when we use CTMC we can use actual embedding functions
         self.token_embeddings = nn.ModuleDict()
-        for feat, n_unique in self.n_cat_feats.items():
-            if token_dim == 0:
-                self.token_embeddings[feat] = nn.Identity()
-            else:
-                count = n_unique + n_mask_feats if feat in mask_feats else n_unique
-                self.token_embeddings[feat] = nn.Embedding(count, token_dim)
-
-        # fix 0 token dims to the number of categories
-        for modality, token_dim in self.token_dims.items():
-            if token_dim == 0:
-                self.token_dims[modality] = (
-                    self.n_cat_feats[modality] + n_mask_feats
-                    if modality in mask_feats
-                    else self.n_cat_feats[modality]
-                )
+        for ntype, feat_list in canonical_node_features.items():
+            for feat in feat_list:
+                if feat == "x":
+                    continue
+                else:
+                    self.token_embeddings[f"{ntype}_{feat}"] = nn.Embedding(
+                        self.n_cat_feats[f"{ntype}_{feat}"], token_dim
+                    )
 
         self.edge_feat_sizes = {}
         for etype in self.edge_types:
-            if etype in {"lig_lig", "prot_atom_to_lig"}:
+            if etype in self.n_cat_feats:
+                self.token_embeddings[etype] = nn.Embedding(
+                    self.n_cat_feats[etype], token_dim
+                )
                 self.edge_feat_sizes[etype] = n_hidden_edge_feats
             else:
                 self.edge_feat_sizes[etype] = 0
@@ -161,48 +146,22 @@ class EndpointVectorField(nn.Module):
         self.edge_embedding = nn.ModuleDict()
 
         for ntype in self.node_types:
-            if ntype in ["lig", "npnde", "pharm"]:
-                self.scalar_embedding[ntype] = nn.Sequential(
-                    nn.Linear(
-                        self.token_dims[f"{ntype}_a"]
-                        + self.token_dims[f"{ntype}_c"]
-                        + self.time_embedding_dim,
-                        n_hidden_scalars,
-                    ),
-                    nn.SiLU(),
-                    nn.Linear(n_hidden_scalars, n_hidden_scalars),
-                    nn.SiLU(),
-                    nn.LayerNorm(n_hidden_scalars),
-                )
-                if ntype == ["lig", "npnde"]:
-                    self.edge_embedding[ntype] = nn.Sequential(
-                        nn.Linear(self.token_dims[f"{ntype}_e"], n_hidden_edge_feats),
-                        nn.SiLU(),
-                        nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
-                        nn.SiLU(),
-                        nn.LayerNorm(n_hidden_edge_feats),
-                    )
+            i = 1  # number of cat features
+            if ntype == "lig":
+                i += 1
             elif ntype == "prot_atom":
-                self.scalar_embedding[ntype] = nn.Sequential(
-                    nn.Linear(
-                        self.token_dims[f"{ntype}_a"]
-                        + self.token_dims[f"{ntype}_e"]
-                        + self.token_dims[f"{ntype}_r"]
-                        + self.time_embedding_dim,
-                        n_hidden_scalars,
-                    ),
-                    nn.SiLU(),
-                    nn.Linear(n_hidden_scalars, n_hidden_scalars),
-                    nn.SiLU(),
-                    nn.LayerNorm(n_hidden_scalars),
-                )
-                self.edge_embedding["cross"] = nn.Sequential(
-                    nn.Linear(self.token_dims[f"{ntype}_edge"], n_hidden_edge_feats),
-                    nn.SiLU(),
-                    nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
-                    nn.SiLU(),
-                    nn.LayerNorm(n_hidden_edge_feats),
-                )
+                i += 2
+            self.scalar_embedding[ntype] = nn.Sequential(
+                nn.Linear(
+                    i * token_dim + self.time_embedding_dim,
+                    n_hidden_scalars,
+                ),
+                nn.SiLU(),
+                nn.Linear(n_hidden_scalars, n_hidden_scalars),
+                nn.SiLU(),
+                nn.LayerNorm(n_hidden_scalars),
+            )
+
         for etype in self.edge_types:
             if self.edge_feat_sizes[etype] > 0:
                 self.edge_embedding[etype] = nn.Sequential(
@@ -274,7 +233,9 @@ class EndpointVectorField(nn.Module):
                         )
                     )
 
-        self.node_output_heads = nn.ModuleDict()
+        self.node_output_heads = (
+            nn.ModuleDict()
+        )  # only need node output heads for cat modalities generated
         for ntype in ["lig", "pharm"]:
             output_dim = 0
             if ntype == "lig":
@@ -287,11 +248,19 @@ class EndpointVectorField(nn.Module):
                 nn.Linear(n_hidden_scalars, output_dim),
             )
 
-        self.edge_output_heads = nn.ModuleDict()
-        for etype in ["lig_lig", "prot_atom_to_lig"]:
-            output_dim = n_bond_types
-            if etype == "prot_atom_to_lig":
-                output_dim = self.n_cross_edge_types
+        self.edge_output_heads = (
+            nn.ModuleDict()
+        )  # need output head for edge types that we will predict bond order on
+        for etype in [
+            "lig_to_lig",
+            "prot_atom_to_lig",
+            "prot_atom_to_npnde",
+            "prot_res_to_lig",
+            "prot_res_to_npnde",
+        ]:
+            output_dim = self.n_cross_edge_types
+            if etype == "lig_to_lig":
+                output_dim = self.n_bond_types
             self.edge_output_heads[etype] = nn.Sequential(
                 nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
                 nn.SiLU(),
@@ -347,54 +316,18 @@ class EndpointVectorField(nn.Module):
                     (num_nodes, self.n_vec_channels, 3), device=device
                 )
                 scalar_feats = []
-                if (
-                    f"{ntype}_a" in self.token_embeddings
-                    and self.token_embeddings[f"{ntype}_a"] is not None
-                ):
-                    scalar_feats.append(
-                        self.token_embeddings[f"{ntype}_a"](
-                            g.nodes[ntype].data["a_t"].argmax(dim=-1)
-                        )
-                    )
-                else:
-                    scalar_feats.append(g.nodes[ntype].data["a_t"])
-                if ntype in ["lig", "npnde"]:
+                for feat in canonical_node_features[ntype]:
+                    if feat == "x":
+                        continue
                     if (
-                        f"{ntype}_c" in self.token_embeddings
-                        and self.token_embeddings[f"{ntype}_c"] is not None
+                        f"{ntype}_{feat}" in self.token_embeddings
+                        and self.token_embeddings.get(f"{ntype}_{feat}") is not None
                     ):
                         scalar_feats.append(
-                            self.token_embeddings[f"{ntype}_c"](
-                                g.nodes[ntype].data["c_t"].argmax(dim=-1)
+                            self.token_embeddings[f"{ntype}_{feat}"](
+                                g.nodes[ntype].data[f"{feat}_t"].argmax(dim=-1)
                             )
                         )
-                    else:
-                        scalar_feats.append(g.nodes[ntype].data["c_t"])
-                if ntype == "prot_atom":
-                    if (
-                        f"{ntype}_r" in self.token_embeddings
-                        and self.token_embeddings[f"{ntype}_r"] is not None
-                    ):
-                        scalar_feats.append(
-                            self.token_embeddings[f"{ntype}_r"](
-                                g.nodes[ntype].data["r_t"].argmax(dim=-1)
-                            )
-                        )
-                    else:
-                        scalar_feats.append(g.nodes[ntype].data["r_t"])
-
-                    if (
-                        f"{ntype}_e" in self.token_embeddings
-                        and self.token_embeddings[f"{ntype}_e"] is not None
-                    ):
-                        scalar_feats.append(
-                            self.token_embeddings[f"{ntype}_e"](
-                                g.nodes[ntype].data["e_t"].argmax(dim=-1)
-                            )
-                        )
-                    else:
-                        scalar_feats.append(g.nodes[ntype].data["e_t"])
-
                 if self.time_embedding_dim == 1:
                     scalar_feats.append(t[node_batch_idx[ntype]].unsqueeze(-1))
                 else:
@@ -407,8 +340,10 @@ class EndpointVectorField(nn.Module):
 
             for etype in self.edge_types:
                 if self.edge_feat_sizes[etype] > 0:
-                    if etype in {"lig_to_lig", "prot_atom_to_lig"}:
-                        edge_feats = g.edges(etype=etype).data["e_t"]
+                    if etype in self.token_embeddings:
+                        edge_feats = self.token_embeddings[etype](
+                            g.edges[etype].data["e_t"].argmax(dim=-1)
+                        )
                         edge_feats = self.edge_embedding[etype](edge_feats)
                         edge_features[etype] = edge_feats
 
@@ -418,7 +353,6 @@ class EndpointVectorField(nn.Module):
 
                 if train_self_condition or inference_first_step:
                     with torch.no_grad():
-                        # Clone features for gradient-stopped pass
                         node_scalar_features_clone = {
                             ntype: feats.clone()
                             for ntype, feats in node_scalar_features.items()
