@@ -5,14 +5,19 @@ import dgl.function as fn
 
 from omtra.models.gvp import _norm_no_nan, _rbf
 from omtra.utils.embedding import rbf_twoscale
+from omtra.utils.graph import canonical_node_features
 
 # TODO: adapt for heterographs 
 
 class SelfConditioningResidualLayer(nn.Module):
     def __init__(self, 
+                 node_types,
+                 edge_types,
+                 n_cat_feats,
                  n_atom_types,
                  n_charges,
                  n_bond_types,
+                 n_pharm_types,
                  node_embedding_dim, 
                  edge_embedding_dim,
                  rbf_dim,
@@ -21,20 +26,32 @@ class SelfConditioningResidualLayer(nn.Module):
 
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
+        self.node_types = node_types
+        self.edge_types = edge_types
+        
+        self.node_residual_mlps = nn.ModuleDict()
+        
+        for ntype in self.node_types:
+            extra_dims = rbf_dim
+            if ntype == 'lig':
+                extra_dims += (n_atom_types + n_charges)
+            elif ntype == 'pharm':
+                extra_dims += (n_pharm_types)
+            self.node_residual_mlps[ntype] = nn.Sequential(
+                nn.Linear(node_embedding_dim+extra_dims, node_embedding_dim),
+                nn.SiLU(),
+                nn.Linear(node_embedding_dim, node_embedding_dim),
+                nn.SiLU(),
+            )
 
-        self.node_residual_mlp = nn.Sequential(
-            nn.Linear(node_embedding_dim+n_atom_types+n_charges+rbf_dim, node_embedding_dim),
-            nn.SiLU(),
-            nn.Linear(node_embedding_dim, node_embedding_dim),
-            nn.SiLU(),
-        )
-
-        self.edge_residual_mlp = nn.Sequential(
-            nn.Linear(edge_embedding_dim + n_bond_types + rbf_dim, edge_embedding_dim),
-            nn.SiLU(),
-            nn.Linear(edge_embedding_dim, edge_embedding_dim),
-            nn.SiLU(),
-        )
+        self.egde_residual_mlps = nn.ModuleDict()
+        for etype in self.edge_types:
+            self.edge_residual_mlps[etype] = nn.Sequential(
+                nn.Linear(edge_embedding_dim + n_bond_types + rbf_dim, edge_embedding_dim),
+                nn.SiLU(),
+                nn.Linear(edge_embedding_dim, edge_embedding_dim),
+                nn.SiLU(),
+            )
 
     def forward(self, 
                 g: torch.Tensor, 

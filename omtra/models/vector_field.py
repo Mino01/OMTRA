@@ -597,6 +597,128 @@ class EndpointVectorField(nn.Module):
                 traj_frames[etype] = [init_frame]
                 traj_frames[f"{etype}_1_pred"] = []
 
+        dst_dict = None
+        for s_idx in range(1, t.shape[0]):
+            # get the next timepoint (s) and the current timepoint (t)
+            s_i = t[s_idx]
+            t_i = t[s_idx - 1]
+            alpha_t_i = alpha_t[s_idx - 1]
+            alpha_s_i = alpha_t[s_idx]
+            alpha_t_prime_i = alpha_t_prime[s_idx - 1]
+
+            # compute next step and set x_t = x_s
+            g, dst_dict = self.step(
+                g,
+                s_i,
+                t_i,
+                alpha_t_i,
+                alpha_s_i,
+                alpha_t_prime_i,
+                node_batch_idx,
+                upper_edge_mask,
+                prev_dst_dict=dst_dict,
+                **kwargs,
+            )
+
+            if visualize:
+                for ntype in self.node_types:
+                    split_sizes = g.batch_num_nodes(ntype).detach().cpu().tolist()
+
+                    for feat in canonical_node_features[ntype]:
+                        feat_key = f"{ntype}_{feat}"
+                        frame = g.nodes[ntype].data[f"{feat}_t"].detach().cpu()
+                        frame = torch.split(frame, split_sizes)
+                        traj_frames[feat_key].append(frame)
+
+                        ep_key = f"{feat_key}_1_pred"
+                        if f"{feat}_1_pred" in g.nodes[ntype].data:
+                            ep_frame = (
+                                g.nodes[ntype].data[f"{feat}_1_pred"].detach().cpu()
+                            )
+                            ep_frame = torch.split(ep_frame, split_sizes)
+                            traj_frames[ep_key].append(ep_frame)
+
+                for etype in self.edge_types:
+                    split_sizes = g.batch_num_edges(etype).detach().cpu().tolist()
+                    frame = g.edges[etype].data["e_t"].detach().cpu()
+                    frame = torch.split(frame, split_sizes)
+                    traj_frames[etype].append(frame)
+
+                    ep_key = f"{etype}_1_pred"
+                    if "e_1_pred" in g.edges[etype].data:
+                        ep_frame = g.edges[etype].data["e_1_pred"].detach().cpu()
+                        ep_frame = torch.split(ep_frame, split_sizes)
+                        traj_frames[ep_key].append(ep_frame)
+
+        # set x_1 = x_t
+        for ntype in self.node_types:
+            for feat in canonical_node_features[ntype]:
+                g.nodes[ntype].data[f"{feat}_1"] = g.nodes[ntype].data[f"{feat}_t"]
+
+        for etype in self.edge_types:
+            g.edges[etype].data["e_1"] = g.edges[etype].data["e_t"]
+
+        if visualize:
+            # currently, traj_frames[key] is a list of lists. each sublist contains the frame for every molecule in the batch
+            # we want to rearrange this so that traj_frames is a list of dictionaries, where each dictionary contains the frames for a single molecule
+            reshaped_traj_frames = []
+            for sys_idx in range(g.batch_size):
+                system_dict = {}
+                for ntype in self.node_types:
+                    system_dict[ntype] = {}
+                    for feat in canonical_node_features[ntype]:
+                        feat_key = f"{ntype}_{feat}"
+                        if feat_key in traj_frames:
+                            feat_traj = []
+                            n_frames = len(traj_frames[feat_key])
+                            for frame_idx in range(n_frames):
+                                if sys_idx < len(traj_frames[feat_key][frame_idx]):
+                                    feat_traj.append(
+                                        traj_frames[feat_key][frame_idx][sys_idx]
+                                    )
+                            if feat_traj:
+                                system_dict[ntype][feat] = torch.stack(feat_traj)
+                        pred_key = f"{feat_key}_1_pred"
+                        if pred_key in traj_frames and traj_frames[pred_key]:
+                            pred_traj = []
+                            n_frames = len(traj_frames[pred_key])
+                            for frame_idx in range(n_frames):
+                                if sys_idx < len(traj_frames[pred_key][frame_idx]):
+                                    pred_traj.append(
+                                        traj_frames[pred_key][frame_idx][sys_idx]
+                                    )
+                            if pred_traj:
+                                system_dict[ntype][f"{feat}_1_pred"] = torch.stack(
+                                    pred_traj
+                                )
+                system_dict["edges"] = {}
+                for etype in self.edge_types:
+                    if etype in traj_frames:
+                        edge_traj = []
+                        n_frames = len(traj_frames[etype])
+                        for frame_idx in range(n_frames):
+                            if sys_idx < len(traj_frames[etype][frame_idx]):
+                                edge_traj.append(traj_frames[etype][frame_idx][sys_idx])
+                        if edge_traj:
+                            system_dict["edges"][etype] = torch.stack(edge_traj)
+                    pred_key = f"{etype}_1_pred"
+                    if pred_key in traj_frames and traj_frames[pred_key]:
+                        pred_traj = []
+                        n_frames = len(traj_frames[pred_key])
+                        for frame_idx in range(n_frames):
+                            if sys_idx < len(traj_frames[pred_key][frame_idx]):
+                                pred_traj.append(
+                                    traj_frames[pred_key][frame_idx][sys_idx]
+                                )
+                        if pred_traj:
+                            system_dict["edges"][f"{etype}_1_pred"] = torch.stack(
+                                pred_traj
+                            )
+                reshaped_traj_frames.append(system_dict)
+            return g, reshaped_traj_frames
+
+        return g
+
     def step(self, g: dgl.DGLGraph):
         # TODO: adapt flowmol step for hetero version
         pass
