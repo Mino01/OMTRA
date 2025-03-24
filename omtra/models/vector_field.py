@@ -553,9 +553,49 @@ class EndpointVectorField(nn.Module):
 
         return x_diff, d
 
-    def integrate(self, g: dgl.DGLGraph):
+    def integrate(
+        self,
+        g: dgl.DGLGraph,
+        node_batch_idx: Dict[str, torch.Tensor],
+        upper_edge_mask: Dict[str, torch.Tensor],
+        n_timesteps: int,
+        visualize=False,
+        **kwargs,
+    ):
         # TODO: adapt flowmol integrate for hetero version
-        pass
+        t = torch.linspace(0, 1, n_timesteps, device=g.device)
+
+        # get the corresponding alpha values for each timepoint
+        alpha_t = self.interpolant_scheduler.alpha_t(
+            t
+        )  # has shape (n_timepoints, n_feats)
+        alpha_t_prime = self.interpolant_scheduler.alpha_t_prime(t)
+
+        for ntype, featlist in canonical_node_features.items():
+            for feat in featlist:
+                g.nodes[ntype].data[f"{feat}_t"] = g.nodes[ntype].data[f"{feat}_0"]
+
+        for etype in self.edge_types:
+            g.edges[etype].data["e_t"] = g.edges[etype].data["e_0"]
+
+        if visualize:
+            traj_frames = {}
+            for ntype in self.node_types:
+                split_sizes = g.batch_num_nodes(ntype).detach().cpu().tolist()
+
+                for feat in canonical_node_features[ntype]:
+                    feat_key = f"{ntype}_{feat}"
+                    init_frame = g.nodes[ntype].data[f"{feat}_0"].detach().cpu()
+                    init_frame = torch.split(init_frame, split_sizes)
+                    traj_frames[feat_key] = [init_frame]
+                    traj_frames[f"{feat_key}_1_pred"] = []
+
+            for etype in self.edge_types:
+                split_sizes = g.batch_num_edges(etype).detach().cpu().tolist()
+                init_frame = g.edges[etype].data["e_0"].detach().cpu()
+                init_frame = torch.split(init_frame, split_sizes)
+                traj_frames[etype] = [init_frame]
+                traj_frames[f"{etype}_1_pred"] = []
 
     def step(self, g: dgl.DGLGraph):
         # TODO: adapt flowmol step for hetero version
