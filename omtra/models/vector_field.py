@@ -295,7 +295,7 @@ class EndpointVectorField(nn.Module):
         g: dgl.DGLGraph,
         t: torch.Tensor,
         node_batch_idx: Dict[str, torch.Tensor],
-        upper_edge_mask: torch.Tensor,
+        upper_edge_mask: Dict[str, torch.Tensor],
         apply_softmax=False,
         remove_com=False,
         prev_dst_dict=None,
@@ -421,7 +421,7 @@ class EndpointVectorField(nn.Module):
         node_positions: Dict[str, torch.Tensor],
         edge_features: Dict[str, torch.Tensor],
         node_batch_idx: Dict[str, torch.Tensor],
-        upper_edge_mask: torch.Tensor,
+        upper_edge_mask: Dict[str, torch.Tensor],
         apply_softmax: bool = False,
         remove_com: bool = False,
     ):
@@ -465,46 +465,74 @@ class EndpointVectorField(nn.Module):
         # TODO: adapt rest of  flowmol denoise_graph for hetero version
 
         # predict final charges and atom type logits
-        node_scalar_features = self.node_output_head(node_scalar_features)
-        atom_type_logits = node_scalar_features[:, : self.n_atom_types]
-        if not self.exclude_charges:
-            atom_charge_logits = node_scalar_features[:, self.n_atom_types :]
+        logits = {}
+        for ntype in [
+            "lig",
+            "pharm",
+        ]:  # TODO: eventually consider reading this from Task groups_generated/modalities
+            node_scalar_features[ntype] = self.node_output_heads[ntype](
+                node_scalar_features[ntype]
+            )
+
+            if ntype == "lig":
+                logits["lig_a"] = node_scalar_features[ntype][:, : self.n_atom_types]
+                if not self.exclude_charges:
+                    logits["lig_c"] = node_scalar_features[ntype][
+                        :, self.n_atom_types :
+                    ]
+            else:
+                logits["pharm_a"] = node_scalar_features[ntype]
 
         # predict the final edge logits
-        ue_feats = edge_features[upper_edge_mask]
-        le_feats = edge_features[~upper_edge_mask]
-        edge_logits = self.to_edge_logits(ue_feats + le_feats)
+        edge_logits = {}
+        for etype in self.edge_types:
+            ue_feats = edge_features[etype][upper_edge_mask[etype]]
+            le_feats = edge_features[etype][~upper_edge_mask[etype]]
+            edge_logits[etype] = self.edge_output_heads[etype](ue_feats + le_feats)
 
         # project node positions back into zero-COM subspace
         if remove_com:
-            g.ndata["x_1_pred"] = node_positions
-            g.ndata["x_1_pred"] = (
-                g.ndata["x_1_pred"]
-                - dgl.readout_nodes(g, feat="x_1_pred", op="mean")[node_batch_idx]
-            )
-            node_positions = g.ndata["x_1_pred"]
+            for ntype in self.node_types:
+                g.nodes[ntype].data["x_1_pred"] = node_positions[ntype]
+                g.nodes[ntype].data["x_1_pred"] = (
+                    g.nodes[ntype].data["x_1_pred"]
+                    - dgl.readout_nodes(g, feat="x_1_pred", op="mean", ntype=ntype)[
+                        node_batch_idx[ntype]
+                    ]
+                )
+                node_positions[ntype] = g.nodes[ntype].data["x_1_pred"]
 
         # build a dictionary of predicted features
-        dst_dict = {"x": node_positions, "a": atom_type_logits, "e": edge_logits}
-        if not self.exclude_charges:
-            dst_dict["c"] = atom_charge_logits
+        dst_dict = {}
+        dst_dict["nodes"] = {}
+        for ntype in ["lig", "pharm"]:
+            dst_dict["nodes"][ntype] = {}
+            for feat in canonical_node_features[ntype]:
+                if feat == "x":
+                    dst_dict["nodes"][ntype][feat] = node_positions[ntype]
+                else:
+                    if f"{ntype}_{feat}" in logits:
+                        dst_dict["nodes"][ntype][feat] = logits[f"{ntype}_{feat}"]
+        dst_dict["edges"] = {}
+        for etype in self.edge_types:
+            if etype in edge_logits:
+                dst_dict["edges"][etype] = edge_logits[etype]
 
         # apply softmax to categorical features, if requested
         # at training time, we don't want to apply softmax because we use cross-entropy loss which includes softmax
         # at inference time, we want to apply softmax to get a vector which lies on the simplex
         if apply_softmax:
-            for feat in dst_dict.keys():
-                if feat in ["a", "c", "e"]:  # if this is a categorical feature
-                    dst_dict[feat] = torch.softmax(
-                        dst_dict[feat], dim=-1
+            for ntype, featdict in dst_dict["nodes"].items():
+                if feat in ["a", "c"]:  # if this is a categorical feature
+                    dst_dict["nodes"][ntype][feat] = torch.softmax(
+                        dst_dict["nodes"][ntype][feat], dim=-1
                     )  # apply softmax to this feature
+            for etype, logits in dst_dict["edges"].items():
+                dst_dict["edges"][etype] = torch.softmax(logits, dim=-1)
 
         return dst_dict
 
-        raise NotImplementedError("denoise_graph not implemented yet")
-
     def precompute_distances(self, g: dgl.DGLGraph, node_positions=None):
-        # TODO: adapt flowmol precompute_distances for hetero version
         """Precompute the pairwise distances between all nodes in the graph."""
         x_diff = {}
         d = {}
@@ -570,6 +598,7 @@ class NodePositionUpdate(nn.Module):
         return positions + vector_updates.squeeze(1)
 
 
+# TODO: Change EdgeUpdate and NodePositionUpdate to be specific to ntype/etype instead of general (wasted space if using module dict in vector field)
 class EdgeUpdate(nn.Module):
     def __init__(
         self,
