@@ -46,8 +46,11 @@ class SelfConditioningResidualLayer(nn.Module):
 
         self.egde_residual_mlps = nn.ModuleDict()
         for etype in self.edge_types:
+            extra_dims = rbf_dim
+            if etype in n_cat_feats:
+                extra_dims += n_cat_feats[etype]
             self.edge_residual_mlps[etype] = nn.Sequential(
-                nn.Linear(edge_embedding_dim + n_bond_types + rbf_dim, edge_embedding_dim),
+                nn.Linear(edge_embedding_dim+extra_dims, edge_embedding_dim),
                 nn.SiLU(),
                 nn.Linear(edge_embedding_dim, edge_embedding_dim),
                 nn.SiLU(),

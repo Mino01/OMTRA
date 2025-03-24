@@ -6,6 +6,8 @@ from typing import Union, Callable, Dict, Optional
 import scipy
 from typing import List
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
+from omtra.tasks.tasks import Task
+from omtra.tasks.modalities import Modality, name_to_modality
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype
@@ -293,6 +295,7 @@ class EndpointVectorField(nn.Module):
     def forward(
         self,
         g: dgl.DGLGraph,
+        task_class: Task,
         t: torch.Tensor,
         node_batch_idx: Dict[str, torch.Tensor],
         upper_edge_mask: Dict[str, torch.Tensor],
@@ -325,7 +328,11 @@ class EndpointVectorField(nn.Module):
                     ):
                         scalar_feats.append(
                             self.token_embeddings[f"{ntype}_{feat}"](
-                                g.nodes[ntype].data[f"{feat}_t"].argmax(dim=-1)
+                                g.nodes[ntype]
+                                .data[f"{feat}_t"]
+                                .argmax(
+                                    dim=-1
+                                )  # NOTE: this assumes that the input is one-hot encoded
                             )
                         )
                 if self.time_embedding_dim == 1:
@@ -342,7 +349,11 @@ class EndpointVectorField(nn.Module):
                 if self.edge_feat_sizes[etype] > 0:
                     if etype in self.token_embeddings:
                         edge_feats = self.token_embeddings[etype](
-                            g.edges[etype].data["e_t"].argmax(dim=-1)
+                            g.edges[etype]
+                            .data["e_t"]
+                            .argmax(
+                                dim=-1
+                            )  # NOTE: this assumes that the input is one-hot encoded
                         )
                         edge_feats = self.edge_embedding[etype](edge_feats)
                         edge_features[etype] = edge_feats
@@ -371,6 +382,7 @@ class EndpointVectorField(nn.Module):
 
                         prev_dst_dict = self.denoise_graph(
                             g,
+                            task_class,
                             node_scalar_features_clone,
                             node_vec_features_clone,
                             node_positions_clone,
@@ -401,6 +413,7 @@ class EndpointVectorField(nn.Module):
 
             dst_dict = self.denoise_graph(
                 g,
+                task_class,
                 node_scalar_features,
                 node_vec_features,
                 node_positions,
@@ -416,6 +429,7 @@ class EndpointVectorField(nn.Module):
     def denoise_graph(
         self,
         g: dgl.DGLGraph,
+        task_class: Task,
         node_scalar_features: Dict[str, torch.Tensor],
         node_vec_features: Dict[str, torch.Tensor],
         node_positions: Dict[str, torch.Tensor],
@@ -445,24 +459,25 @@ class EndpointVectorField(nn.Module):
                     else:
                         updater_idx = 0
 
-                    for ntype in self.node_types:
-                        node_positions[ntype] = self.node_position_updaters[ntype][
-                            updater_idx
-                        ](
-                            node_scalar_features[ntype],
-                            node_positions[ntype],
-                            node_vec_features[ntype],
-                        )
-
-                    x_diff, d = self.precompute_distances(g, node_positions)
-
-                    for etype in self.edge_types:
-                        # NOTE: maybe add check if edge feat size > 0
-                        edge_features[etype] = self.edge_updaters[etype][updater_idx](
-                            g, node_scalar_features, edge_features, d=d, etype=etype
-                        )
-
-        # TODO: adapt rest of  flowmol denoise_graph for hetero version
+                    modalities_generated = task_class.modalities_generated
+                    for modality in modalities_generated:
+                        if modality.graph_entity == "node" and modality.data_key == "x":
+                            ntype = modality.entity_name
+                            node_positions[ntype] = self.node_position_updaters[ntype][
+                                updater_idx
+                            ](
+                                node_scalar_features[ntype],
+                                node_positions[ntype],
+                                node_vec_features[ntype],
+                            )
+                        if modality.graph_entity == "edge":
+                            x_diff, d = self.precompute_distances(
+                                g, node_positions
+                            )  # NOTE: consider adding etype arg to precompute dists
+                            etype = modality.entity_name
+                            edge_features[etype] = self.edge_updaters[etype][
+                                updater_idx
+                            ](g, node_scalar_features, edge_features, d=d, etype=etype)
 
         # predict final charges and atom type logits
         logits = {}
