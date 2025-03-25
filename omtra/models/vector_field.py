@@ -9,7 +9,12 @@ from typing import List
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.tasks.tasks import Task
-from omtra.tasks.modalities import Modality, name_to_modality, MODALITY_ORDER
+from omtra.tasks.modalities import (
+    Modality,
+    name_to_modality,
+    MODALITY_ORDER,
+    DESIGN_SPACE,
+)
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype
@@ -65,17 +70,6 @@ class EndpointVectorField(nn.Module):
     ):
         super().__init__()
         self.token_dim = token_dim
-        self.n_lig_atom_types = len(lig_atom_type_map)
-        self.n_npnde_atom_types = len(npnde_atom_type_map)
-        self.n_protein_atom_types = len(protein_atom_map)
-        self.n_protein_residue_types = len(residue_map)
-        self.n_protein_element_types = len(protein_element_map)
-        self.n_pharm_types = len(ph_idx_to_type)
-        self.n_cross_edge_types = (
-            2  # NOTE: un-hard code eventually (2 for proximity, covalent)
-        )
-        self.n_charges = n_charges
-        self.n_bond_types = n_bond_types
         self.n_hidden_scalars = n_hidden_scalars
         self.n_hidden_edge_feats = n_hidden_edge_feats
         self.n_vec_channels = n_vec_channels
@@ -101,26 +95,6 @@ class EndpointVectorField(nn.Module):
             self.continuous_inv_temp_schedule, self.continouts_inv_temp_max
         )
 
-        self.n_cat_feats = {  # number of possible values for each categorical variable (+1 for mask token for generated modalities)
-            "lig_a": self.n_lig_atom_types + 1,
-            "lig_c": self.n_charges + 1,
-            "lig_to_lig": self.n_bond_types + 1,
-            "lig_e": self.n_bond_types + 1,
-            "npnde_a": self.n_npnde_atom_types,
-            "npnde_c": self.n_charges,
-            "npnde_to_npnde": self.n_bond_types,
-            "npnde_e": self.n_bond_types,
-            "pharm_a": self.n_pharm_types + 1,
-            "prot_atom_name": self.n_protein_atom_types,
-            "prot_atom_element": self.n_protein_element_types,
-            "prot_atom_r": self.n_protein_residue_types,
-            "prot_res_r": self.n_protein_residue_types,
-            "prot_atom_to_prot_atom": 0,
-            "prot_atom_to_lig": self.n_cross_edge_types,
-            "prot_atom_to_npnde": self.n_cross_edge_types,
-            "prot_res_to_lig": self.n_cross_edge_types,
-            "prot_res_to_npnde": self.n_cross_edge_types,
-        }
         self.node_types = set()
         self.edge_types = set()
         self.token_embeddings = nn.ModuleDict()
@@ -129,21 +103,20 @@ class EndpointVectorField(nn.Module):
 
         for modality_name in MODALITY_ORDER:
             modality = name_to_modality(modality_name)
-            if modality.data_key == "x" or modality.data_key == "v":
-                continue
             if modality.graph_entity == "edge":
                 self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
                 self.edge_types.add(modality.entity_name)
-                if self.n_cat_feats[modality.entity_name] > 0:
+                if modality.n_categories is not None and modality.n_categories > 0:
                     self.token_embeddings[modality.entity_name] = nn.Embedding(
-                        self.n_cat_feats[modality.entity_name], token_dim
+                        modality.n_categories, token_dim
                     )
-            else:
-                self.token_embeddings[modality_name] = nn.Embedding(
-                    self.n_cat_feats[modality_name], token_dim
-                )
-                self.node_types.add(modality.entity_name)
-                self.ntype_cat_feats[modality.entity_name] += 1
+            else:  # node
+                if modality.n_categories is not None and modality.n_categories > 0:
+                    self.token_embeddings[modality_name] = nn.Embedding(
+                        modality.n_categories, token_dim
+                    )
+                    self.node_types.add(modality.entity_name)
+                    self.ntype_cat_feats[modality.entity_name] += 1
 
         self.scalar_embedding = nn.ModuleDict()
         self.edge_embedding = nn.ModuleDict()
@@ -233,36 +206,26 @@ class EndpointVectorField(nn.Module):
         self.node_output_heads = (
             nn.ModuleDict()
         )  # only need node output heads for cat modalities generated
-        for ntype in ["lig", "pharm"]:
-            output_dim = 0
-            if ntype == "lig":
-                output_dim = self.n_lig_atom_types + n_charges
-            elif ntype == "pharm":
-                output_dim = self.n_pharm_types
-            self.node_output_heads[ntype] = nn.Sequential(
-                nn.Linear(n_hidden_scalars, n_hidden_scalars),
-                nn.SiLU(),
-                nn.Linear(n_hidden_scalars, output_dim),
-            )
-
         self.edge_output_heads = (
             nn.ModuleDict()
         )  # need output head for edge types that we will predict bond order on
-        for etype in [
-            "lig_to_lig",
-            "prot_atom_to_lig",
-            "prot_atom_to_npnde",
-            "prot_res_to_lig",
-            "prot_res_to_npnde",
-        ]:
-            output_dim = self.n_cross_edge_types
-            if etype == "lig_to_lig":
-                output_dim = self.n_bond_types
-            self.edge_output_heads[etype] = nn.Sequential(
-                nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
-                nn.SiLU(),
-                nn.Linear(n_hidden_edge_feats, output_dim),
-            )
+
+        for modality_name in DESIGN_SPACE:
+            modality = name_to_modality(modality_name)
+            if modality.graph_entity == "node":
+                if modality.n_categories and modality.n_categories > 0:
+                    self.node_output_heads[modality_name] = nn.Sequential(
+                        nn.Linear(n_hidden_scalars, n_hidden_scalars),
+                        nn.SiLU(),
+                        nn.Linear(n_hidden_scalars, modality.n_categories),
+                    )
+            else:  # edge
+                if modality.n_categories and modality.n_categories > 0:
+                    self.edge_output_heads[modality_name] = nn.Sequential(
+                        nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
+                        nn.SiLU(),
+                        nn.Linear(n_hidden_edge_feats, modality.n_categories),
+                    )
 
         if self.self_conditioning:
             raise NotImplementedError("Self conditioning not implemented yet")

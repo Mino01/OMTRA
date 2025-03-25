@@ -251,6 +251,10 @@ class OMTRA(pl.LightningModule):
 
         # for all modalities held fixed, convert the true values to the current time
         for modality in task_class.modalities_fixed:
+            if (
+                modality.n_categories is not None and modality.n_categories == 0
+            ):  # will be None for continous features (dont want to skip)
+                continue
             data_src = g.edges if modality.graph_entity == "edge" else g.nodes
             dk = modality.data_key
             data_src[modality.entity_name].data[f"{dk}_t"] = data_src[

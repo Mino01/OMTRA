@@ -5,6 +5,7 @@ from omegaconf import DictConfig
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.constants import (
     lig_atom_type_map,
+    charge_map,
     npnde_atom_type_map,
     ph_idx_to_type,
     aa_substitutions,
@@ -59,13 +60,6 @@ class PlinderDataset(ZarrDataset):
         }
         self.encode_residue = {res: i for i, res in enumerate(residue_map)}
         self.encode_atom = {atom: i for i, atom in enumerate(protein_atom_map)}
-        self.n_categories_dict = {
-            'lig_a': len(lig_atom_type_map),
-            # 'lig_c': len(lig_c_idx_to_val),
-            'lig_c': 10, # TODO: change this later just for debugging
-            'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
-            'pharm_a': len(ph_idx_to_type),
-        }
 
     @classproperty
     def name(cls):
@@ -493,12 +487,11 @@ class PlinderDataset(ZarrDataset):
     
     def encode_charges(self, charges: torch.Tensor) -> torch.Tensor:
         # TODO: find real solution to this later
-        charge_types = [0, 1, 2, 3, -1, -2 -3]
-        charge_type_map = {charge: i for i, charge in enumerate(charge_types)}
+        charge_type_map = {charge: i for i, charge in enumerate(charge_map)}
         encoded_charges = []
         for charge in charges:
             if charge not in charge_type_map:
-                encoded_charges.append(len(charge_types))
+                encoded_charges.append(len(charge_map))
         return torch.Tensor(encoded_charges).long()
     
     def convert_ligand(
@@ -677,7 +670,9 @@ class PlinderDataset(ZarrDataset):
         node_data, edge_data, edge_idxs = {}, {}, {}
         node_data["npnde"] = {"x_1_true": torch.empty(0), "a_1_true": torch.empty(0), "c_1_true": torch.empty(0)}
         edge_data["npnde_to_npnde"] = {"e_1_true": torch.empty(0)}
+        edge_data["prot_atom_to_npnde"] = {"e_1_true": torch.empty(0)}
         edge_idxs["npnde_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["prot_atom_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
 
         if not npndes:
             return node_data, edge_idxs, edge_data
@@ -958,7 +953,7 @@ class PlinderDataset(ZarrDataset):
 
             # if the prior is masked, we need to pass the number of categories for this modality to the prior function
             if prior_name == 'masked':
-                prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict[modality_name])
+                prior_func = functools.partial(prior_func, n_categories=modality.n_categories)
 
             # draw a sample from the prior
             prior_sample = prior_func(target_data)

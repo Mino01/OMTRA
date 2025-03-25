@@ -107,6 +107,9 @@ class ProteinLigandDeNovo(Task):
         'type': 'fixed'
     }
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
+    conditional_paths["prot_atom_lig_e"] = {
+        'type': 'ctmc_mask'
+    }
     
 
 
@@ -122,7 +125,16 @@ class ExpApoDeNovoLigand(Task):
     priors['npnde_x'] = {
         'type': 'fixed'
     }
+    priors['prot_atom_npnde_e'] = {
+        'type': 'fixed'
+    }
+    priors['prot_atom_lig_e'] = {
+        'type': 'masked'
+    }
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
+    conditional_paths["prot_atom_lig_e"] = {
+        'type': 'ctmc_mask'
+    }
 
 @register_task("pred_apo_conditioned_denovo_ligand")
 class PredApoDeNovoLigand(ExpApoDeNovoLigand):
@@ -133,7 +145,16 @@ class PredApoDeNovoLigand(ExpApoDeNovoLigand):
     priors['npnde_x'] = {
         'type': 'fixed'
     }
+    priors['prot_atom_npnde_e'] = {
+        'type': 'fixed'
+    }
+    priors['prot_atom_lig_e'] = {
+        'type': 'masked'
+    }
     conditional_paths = dict(**cpc.denovo_ligand, **cpc.protein)
+    conditional_paths["prot_atom_lig_e"] = {
+        'type': 'ctmc_mask'
+    }
 
 @register_task("flexible_docking")
 class FlexibleDocking(Task):
@@ -163,7 +184,16 @@ class ExpApoConditionedLigandDocking(Task):
     priors['npnde_x'] = { 
         'type': 'fixed'
     }
+    priors['prot_atom_npnde_e'] = {
+        'type': 'fixed'
+    }
+    priors['prot_atom_lig_e'] = {
+        'type': 'masked'
+    }
     conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+    conditional_paths["prot_atom_lig_e"] = {
+        'type': 'ctmc_mask'
+    }
 
 @register_task("predapo_conditioned_ligand_docking")
 class PredApoConditionedLigandDocking(Task):
@@ -178,7 +208,16 @@ class PredApoConditionedLigandDocking(Task):
     priors['npnde_x'] = {
         'type': 'fixed'
     }
+    priors['prot_atom_npnde_e'] = {
+        'type': 'fixed'
+    }
+    priors['prot_atom_lig_e'] = {
+        'type': 'masked'
+    }
     conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+    conditional_paths["prot_atom_lig_e"] = {
+        'type': 'ctmc_mask'
+    }
 
 
 ##

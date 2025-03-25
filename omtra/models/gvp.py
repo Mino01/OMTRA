@@ -3,7 +3,7 @@ from torch import nn, einsum
 import dgl
 import dgl.function as fn
 from dgl.nn.functional import edge_softmax
-from typing import List, Tuple, Union, Dict, Optional
+from typing import List, Tuple, Union, Dict, Optional, Set
 from functools import partial
 import math
 
@@ -242,8 +242,8 @@ class GVPLayerNorm(nn.Module):
 class HeteroGVPConv(nn.Module):
     def __init__(
         self,
-        node_types: List[str],
-        edge_types: List[str],
+        node_types: Union[List[str], Set[str]],
+        edge_types: Union[List[str], Set[str]],
         scalar_size: int = 128,
         vector_size: int = 16,
         n_cp_feats: int = 0,
