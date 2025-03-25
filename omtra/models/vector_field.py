@@ -2,12 +2,13 @@ import torch
 import torch.nn as nn
 import dgl
 import dgl.function as fn
+from collections import defaultdict
 from typing import Union, Callable, Dict, Optional
 import scipy
 from typing import List
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.tasks.tasks import Task
-from omtra.tasks.modalities import Modality, name_to_modality
+from omtra.tasks.modalities import Modality, name_to_modality, MODALITY_ORDER
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype
@@ -110,12 +111,14 @@ class EndpointVectorField(nn.Module):
             "lig_a": self.n_lig_atom_types + 1,
             "lig_c": self.n_charges + 1,
             "lig_to_lig": self.n_bond_types + 1,
+            "lig_e": self.n_bond_types + 1,
             "npnde_a": self.n_npnde_atom_types,
             "npnde_c": self.n_charges,
             "npnde_to_npnde": self.n_bond_types,
+            "npnde_e": self.n_bond_types,
             "pharm_a": self.n_pharm_types + 1,
-            "prot_atom_a": self.n_protein_atom_types,
-            "prot_atom_e": self.n_protein_element_types,
+            "prot_atom_name": self.n_protein_atom_types,
+            "prot_atom_element": self.n_protein_element_types,
             "prot_atom_r": self.n_protein_residue_types,
             "prot_res_r": self.n_protein_residue_types,
             "prot_atom_to_lig": self.n_cross_edge_types,
@@ -123,36 +126,31 @@ class EndpointVectorField(nn.Module):
             "prot_res_to_lig": self.n_cross_edge_types,
             "prot_res_to_npnde": self.n_cross_edge_types,
         }
-
+        self.node_types = set()
+        self.edge_types = set()
         self.token_embeddings = nn.ModuleDict()
-        for ntype, feat_list in canonical_node_features.items():
-            for feat in feat_list:
-                if feat == "x":
-                    continue
-                else:
-                    self.token_embeddings[f"{ntype}_{feat}"] = nn.Embedding(
-                        self.n_cat_feats[f"{ntype}_{feat}"], token_dim
-                    )
+        self.edge_feat_sizes = defaultdict(int)
+        self.ntype_cat_feats = defaultdict(int)
 
-        self.edge_feat_sizes = {}
-        for etype in self.edge_types:
-            if etype in self.n_cat_feats:
-                self.token_embeddings[etype] = nn.Embedding(
-                    self.n_cat_feats[etype], token_dim
-                )
-                self.edge_feat_sizes[etype] = n_hidden_edge_feats
+        for modality_name in MODALITY_ORDER:
+            modality = name_to_modality(modality_name)
+            if modality.data_key == "x" or modality.data_key == "v":
+                continue
+            self.token_embeddings[modality_name] = nn.Embedding(
+                self.n_cat_feats[modality_name], token_dim
+            )
+            if modality.graph_entity == "edge":
+                self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
+                self.edge_types.add(modality.entity_name)
             else:
-                self.edge_feat_sizes[etype] = 0
+                self.node_types.add(modality.entity_name)
+                self.ntype_cat_feats[modality.entity_name] += 1
 
         self.scalar_embedding = nn.ModuleDict()
         self.edge_embedding = nn.ModuleDict()
 
         for ntype in self.node_types:
-            i = 1  # number of cat features
-            if ntype == "lig":
-                i += 1
-            elif ntype == "prot_atom":
-                i += 2
+            i = self.ntype_cat_feats[ntype]
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
                     i * token_dim + self.time_embedding_dim,
@@ -226,8 +224,6 @@ class EndpointVectorField(nn.Module):
                 for _ in range(n_updaters):
                     self.edge_updaters[etype].append(
                         EdgeUpdate(
-                            self.node_types,
-                            self.edge_types,
                             n_hidden_scalars,
                             n_hidden_edge_feats,
                             update_edge_w_distance=update_edge_w_distance,
@@ -477,7 +473,13 @@ class EndpointVectorField(nn.Module):
                             etype = modality.entity_name
                             edge_features[etype] = self.edge_updaters[etype][
                                 updater_idx
-                            ](g, node_scalar_features, edge_features, d=d, etype=etype)
+                            ](
+                                g,
+                                node_scalar_features,
+                                edge_features[etype],
+                                d=d[etype],
+                                etype=etype,
+                            )
 
         # predict final charges and atom type logits
         logits = {}
@@ -857,12 +859,9 @@ class NodePositionUpdate(nn.Module):
         return positions + vector_updates.squeeze(1)
 
 
-# TODO: Change EdgeUpdate and NodePositionUpdate to be specific to ntype/etype instead of general (wasted space if using module dict in vector field)
 class EdgeUpdate(nn.Module):
     def __init__(
         self,
-        node_types,
-        edge_types,
         n_node_scalars,
         n_edge_feats,
         update_edge_w_distance=False,
@@ -870,26 +869,19 @@ class EdgeUpdate(nn.Module):
     ):
         super().__init__()
 
-        self.node_types = node_types
-        self.edge_types = edge_types
-
         self.update_edge_w_distance = update_edge_w_distance
 
         input_dim = n_node_scalars * 2 + n_edge_feats
         if update_edge_w_distance:
             input_dim += rbf_dim
 
-        self.edge_update_fns = nn.ModuleDict()
-        for etype in self.edge_types:
-            self.edge_update_fns[etype] = nn.Sequential(
-                nn.Linear(input_dim, n_edge_feats),
-                nn.SiLU(),
-                nn.Linear(n_edge_feats, n_edge_feats),
-                nn.SiLU(),
-            )
-        self.edge_norms = nn.ModuleDict()
-        for etype in self.edge_types:
-            self.edge_norms[etype] = nn.LayerNorm(n_edge_feats)
+        self.edge_update_fn = nn.Sequential(
+            nn.Linear(input_dim, n_edge_feats),
+            nn.SiLU(),
+            nn.Linear(n_edge_feats, n_edge_feats),
+            nn.SiLU(),
+        )
+        self.edge_norm = nn.LayerNorm(n_edge_feats)
 
     def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, etype):
         src_ntype, _, dst_ntype = to_canonical_etype(etype)
@@ -899,13 +891,13 @@ class EdgeUpdate(nn.Module):
         mlp_inputs = [
             node_scalars[src_ntype][src_idxs],
             node_scalars[dst_ntype][dst_idxs],
-            edge_feats[etype],
+            edge_feats,
         ]
 
         if self.update_edge_w_distance and d is not None:
-            mlp_inputs.append(d[etype])
+            mlp_inputs.append(d)
 
-        edge_feats = self.edge_norms[etype](
-            edge_feats + self.edge_update_fns[etype](torch.cat(mlp_inputs, dim=-1))
+        edge_feats = self.edge_norm(
+            edge_feats + self.edge_update_fn(torch.cat(mlp_inputs, dim=-1))
         )
         return edge_feats
