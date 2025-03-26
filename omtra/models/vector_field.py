@@ -221,7 +221,7 @@ class EndpointVectorField(nn.Module):
                     )
             else:  # edge
                 if modality.n_categories and modality.n_categories > 0:
-                    self.edge_output_heads[modality_name] = nn.Sequential(
+                    self.edge_output_heads[modality.entity_name] = nn.Sequential(
                         nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
                         nn.SiLU(),
                         nn.Linear(n_hidden_edge_feats, modality.n_categories),
@@ -275,7 +275,9 @@ class EndpointVectorField(nn.Module):
             )
             for modality in modalities_present:
                 ntype = modality.entity_name
-                if modality.graph_entity == "node" and g.num_nodes(ntype) > 0:
+                if modality.graph_entity == "node":
+                    if g.num_nodes(ntype) == 0:
+                        continue
                     if modality.data_key == "x":
                         node_positions[ntype] = g.nodes[ntype].data[
                             f"{modality.data_key}_t"
@@ -292,7 +294,7 @@ class EndpointVectorField(nn.Module):
                                 g.nodes[ntype].data[f"{modality.data_key}_t"]
                             )
                         )
-                else:
+                else:  # edge
                     etype = modality.entity_name
                     if self.edge_feat_sizes[etype] > 0 and g.num_edges(etype) > 0:
                         edge_feats = self.token_embeddings[modality.entity_name](
@@ -433,7 +435,7 @@ class EndpointVectorField(nn.Module):
                         if modality.graph_entity == "edge":
                             x_diff, d = self.precompute_distances(
                                 g, node_positions
-                            )  # NOTE: consider adding etype arg to precompute dists
+                            )  # NOTE: consider adding etype arg to precompute dists to avoid recomputing for all etypes
                             etype = modality.entity_name
                             edge_features[etype] = self.edge_updaters[etype][
                                 updater_idx
@@ -445,35 +447,34 @@ class EndpointVectorField(nn.Module):
                                 etype=etype,
                             )
 
-        # predict final charges and atom type logits
         logits = {}
-        for ntype in [
-            "lig",
-            "pharm",
-        ]:  # TODO: eventually consider reading this from Task groups_generated/modalities
-            node_scalar_features[ntype] = self.node_output_heads[ntype](
-                node_scalar_features[ntype]
-            )
-
-            if ntype == "lig":
-                logits["lig_a"] = node_scalar_features[ntype][:, : self.n_atom_types]
-                if not self.exclude_charges:
-                    logits["lig_c"] = node_scalar_features[ntype][
-                        :, self.n_atom_types :
-                    ]
-            else:
-                logits["pharm_a"] = node_scalar_features[ntype]
-
-        # predict the final edge logits
-        edge_logits = {}
-        for etype in self.edge_types:
-            ue_feats = edge_features[etype][upper_edge_mask[etype]]
-            le_feats = edge_features[etype][~upper_edge_mask[etype]]
-            edge_logits[etype] = self.edge_output_heads[etype](ue_feats + le_feats)
+        for modality in task_class.modalities_generated:
+            if (
+                modality.graph_entity == "node"
+                and modality.n_categories is not None
+                and modality.n_categories > 0
+            ):
+                ntype = modality.entity_name
+                logits[modality.name] = self.node_output_heads[modality.name](
+                    node_scalar_features[ntype]
+                )
+            elif (
+                modality.graph_entity == "edge"
+                and modality.n_categories is not None
+                and modality.n_categories > 0
+            ):
+                etype = modality.entity_name
+                ue_feats = edge_features[etype][upper_edge_mask[etype]]
+                le_feats = edge_features[etype][~upper_edge_mask[etype]]
+                logits[modality.entity_name] = self.edge_output_heads[
+                    modality.entity_name
+                ](ue_feats + le_feats)
 
         # project node positions back into zero-COM subspace
         if remove_com:
             for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
                 g.nodes[ntype].data["x_1_pred"] = node_positions[ntype]
                 g.nodes[ntype].data["x_1_pred"] = (
                     g.nodes[ntype].data["x_1_pred"]
@@ -485,31 +486,30 @@ class EndpointVectorField(nn.Module):
 
         # build a dictionary of predicted features
         dst_dict = {}
-        dst_dict["nodes"] = {}
-        for ntype in ["lig", "pharm"]:
-            dst_dict["nodes"][ntype] = {}
-            for feat in canonical_node_features[ntype]:
-                if feat == "x":
-                    dst_dict["nodes"][ntype][feat] = node_positions[ntype]
+        for modality in task_class.modalities_generated:
+            if modality.graph_entity == "node":
+                ntype = modality.entity_name
+                if modality.data_key == "x":
+                    dst_dict[modality.name] = node_positions[ntype]
                 else:
-                    if f"{ntype}_{feat}" in logits:
-                        dst_dict["nodes"][ntype][feat] = logits[f"{ntype}_{feat}"]
-        dst_dict["edges"] = {}
-        for etype in self.edge_types:
-            if etype in edge_logits:
-                dst_dict["edges"][etype] = edge_logits[etype]
+                    if apply_softmax:
+                        dst_dict[modality.name] = torch.softmax(
+                            logits[modality.name], dim=-1
+                        )
+                    else:
+                        dst_dict[modality.name] = logits[modality.name]
+            else:  # edge
+                etype = modality.entity_name
+                if apply_softmax:
+                    dst_dict[etype] = torch.softmax(logits[etype], dim=-1)
+                else:
+                    dst_dict[etype] = logits[etype]
 
+        # TODO: consider this when doing loss fns (not doing one-hot encoding anymore)
+        # NOTE: moved softmax into above loop
         # apply softmax to categorical features, if requested
         # at training time, we don't want to apply softmax because we use cross-entropy loss which includes softmax
         # at inference time, we want to apply softmax to get a vector which lies on the simplex
-        if apply_softmax:
-            for ntype, featdict in dst_dict["nodes"].items():
-                if feat in ["a", "c"]:  # if this is a categorical feature
-                    dst_dict["nodes"][ntype][feat] = torch.softmax(
-                        dst_dict["nodes"][ntype][feat], dim=-1
-                    )  # apply softmax to this feature
-            for etype, logits in dst_dict["edges"].items():
-                dst_dict["edges"][etype] = torch.softmax(logits, dim=-1)
 
         return dst_dict
 
