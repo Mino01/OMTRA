@@ -93,15 +93,6 @@ Modality.register(MODALITY_REGISTER,
 )
 
 Modality.register(MODALITY_REGISTER,
-    name='pharm_e',
-    group='pharmacophore',
-    graph_entity='edge',
-    entity_name='pharm_to_pharm',
-    data_key='e',
-    n_categories=0,
-)
-
-Modality.register(MODALITY_REGISTER,
     name='prot_atom_x',
     group='protein_structure',
     graph_entity='node',
@@ -136,7 +127,7 @@ Modality.register(MODALITY_REGISTER,
 
 Modality.register(MODALITY_REGISTER,
     name='prot_atom_lig_e',
-    group='ligand_identity', # NOTE: Need other group for this?
+    group='protein_identity', #TODO: this was ligand_identity, but that doesn't work for unconditional generation
     graph_entity='edge',
     entity_name='prot_atom_to_lig',
     data_key='e',

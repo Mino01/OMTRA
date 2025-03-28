@@ -40,6 +40,10 @@ class Task:
         return modalities
     
     @classproperty
+    def modalities_present(self) -> List[Modality]:
+        return self.modalities_fixed + self.modalities_generated
+    
+    @classproperty
     def plinder_link_version(self) -> str:
         prot_atom_prior = self.priors.get('prot_atom_x', None)
         if prot_atom_prior is None:

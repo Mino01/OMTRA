@@ -15,7 +15,7 @@ from omtra.tasks.modalities import name_to_modality
 from omtra.utils.misc import classproperty
 from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.priors.prior_factory import get_prior
-from omtra.constants import lig_atom_type_map, ph_idx_to_type
+from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
 
 class PharmitDataset(ZarrDataset):
     def __init__(self, 
@@ -29,13 +29,12 @@ class PharmitDataset(ZarrDataset):
         self.prior_config = prior_config
 
 
-        dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
-        dists_dict = np.load(dists_file)
-        lig_c_idx_to_val = dists_dict['p_tcv_c_space'] # a list of unique charges that appear in the dataset
+        # dists_file = Path(processed_data_dir) / f'{split}_dists.npz'
+        # dists_dict = np.load(dists_file)
 
         self.n_categories_dict = {
             'lig_a': len(lig_atom_type_map),
-            'lig_c': len(lig_c_idx_to_val),
+            'lig_c': len(charge_map),
             'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
             'pharm_a': len(ph_idx_to_type),
         }
@@ -95,6 +94,10 @@ class PharmitDataset(ZarrDataset):
 
         # convert sparse xae to dense xae
         lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(*xace_ligand)
+
+        # convert charges to token indicies
+        charge_map_tensor = torch.tensor(charge_map)
+        lig_c = torch.searchsorted(charge_map_tensor, lig_c)
 
         # construct inputs to graph building function
         g_node_data = {

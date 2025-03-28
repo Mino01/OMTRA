@@ -7,7 +7,7 @@ ph_idx_to_type = [
     "Hydrophobic",
     "Halogen",
 ]
-charge_map = [0, 1, 2, 3, -1, -2 -3] # TODO: Just a place holder, change to real one eventually
+charge_map = [-3, -2, -1, 0, 1, 2, 3, 5]
 
 ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}
 

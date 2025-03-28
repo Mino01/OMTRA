@@ -14,7 +14,7 @@ from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
-from omtra.constants import lig_atom_type_map, ph_idx_to_type
+from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
 from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
 from omtra.models.vector_field import EndpointVectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
@@ -69,19 +69,17 @@ class OMTRA(pl.LightningModule):
 
         # number of categories for categoircal features
         # in our generative process
-        dists_dict = np.load(self.dists_file)
-        lig_c_idx_to_val = dists_dict[
-            "p_tcv_c_space"
-        ]  # a list of unique charges that appear in the dataset
+        # dists_dict = np.load(self.dists_file)
         self.n_categories_dict = {
             "lig_a": len(lig_atom_type_map),
-            "lig_c": len(lig_c_idx_to_val),
+            "lig_c": len(charge_map),
             "lig_e": 4,  # hard-coded assumption of 4 bond types (none, single, double, triple)
             "pharm_a": len(ph_idx_to_type),
         }
         self.time_scaled_loss = False
         self.interpolant_scheduler = InterpolantScheduler(schedule_type="linear")
         self.vector_field = EndpointVectorField(
+            td_coupling=self.td_coupling,
             interpolant_scheduler=self.interpolant_scheduler
         )  # TODO: initialize this properly
 

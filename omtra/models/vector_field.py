@@ -9,6 +9,8 @@ from typing import List
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.tasks.tasks import Task
+from omtra.tasks.register import task_name_to_class
+from omtra.load.conf import TaskDatasetCoupling
 from omtra.tasks.modalities import (
     Modality,
     name_to_modality,
@@ -27,11 +29,14 @@ from omtra.constants import (
     protein_atom_map,
 )
 
-
+# TODO: have we handled pharm vec features appropriately?
+# TODO: do we initialize pharm vec features?
+# TODO: we don't create node output heads for pharm vec features
 class EndpointVectorField(nn.Module):
     def __init__(
         self,
         interpolant_scheduler: InterpolantScheduler,
+        td_coupling: TaskDatasetCoupling,
         n_charges: int = 6,
         n_bond_types: int = 4,
         n_vec_channels: int = 16,
@@ -77,6 +82,7 @@ class EndpointVectorField(nn.Module):
         self.n_recycles = n_recycles
         self.separate_mol_updaters: bool = separate_mol_updaters
         self.interpolant_scheduler = interpolant_scheduler
+        self.td_coupling: TaskDatasetCoupling = td_coupling
         self.time_embedding_dim = time_embedding_dim
         self.self_conditioning = self_conditioning
         self.has_mask = has_mask
@@ -101,45 +107,66 @@ class EndpointVectorField(nn.Module):
         self.edge_feat_sizes = defaultdict(int)
         self.ntype_cat_feats = defaultdict(int)
 
-        for modality_name in MODALITY_ORDER:
-            modality = name_to_modality(modality_name)
-            if modality.graph_entity == "edge":
-                self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
-                self.edge_types.add(modality.entity_name)
-                if modality.n_categories is not None and modality.n_categories > 0:
-                    self.token_embeddings[modality.entity_name] = nn.Embedding(
-                        modality.n_categories, token_dim
-                    )
-            else:  # node
-                if modality.n_categories is not None and modality.n_categories > 0:
-                    self.token_embeddings[modality_name] = nn.Embedding(
-                        modality.n_categories, token_dim
-                    )
-                    self.node_types.add(modality.entity_name)
-                    self.ntype_cat_feats[modality.entity_name] += 1
 
+        # get the set of all modalities that will be present in our graphs
+        task_classes = [task_name_to_class(task_name) for task_name in td_coupling.task_space]
+        modality_present_space = set()
+        modality_generated_space = set()
+        for task_class in task_classes:
+            for modality in task_class.modalities_fixed:
+                modality_present_space.add(modality.name)
+            for modality in task_class.modalities_generated:
+                modality_present_space.add(modality.name)
+                modality_generated_space.add(modality.name)
+
+        modalities_present_cls = [name_to_modality(modality_name) for modality_name in modality_present_space]
+        modalities_generated_cls = [name_to_modality(modality_name) for modality_name in modality_generated_space]
+
+        # get the set of all nodes present in our graphs
+        self.node_types = set(m.entity_name for m in modalities_present_cls if m.graph_entity == "node")
+
+        # create token embeddings for all categorical features that we are modeling
+        for m in modalities_present_cls:
+            needs_token_embed = m.n_categories is not None and m.n_categories > 0
+            if not needs_token_embed:
+                continue
+            # if the modality is being generated, there is an extra mask token
+            is_generated = m.name in modality_generated_space
+            self.token_embeddings[m.name] = nn.Embedding(
+                m.n_categories+int(is_generated), token_dim
+            )
+            # record the number of categorical features for each node type, not sure why, keeping tyler's code in place
+            if m.graph_entity == "node":
+                self.ntype_cat_feats[m.entity_name] += 1
+
+        # record modalities that are on edges
+        for modality in modalities_present_cls:
+            if modality.graph_entity != "edge":
+                continue
+            if modality.n_categories is None:
+                raise ValueError("did not expect continuous edge features")
+            self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
+            self.edge_types.add(modality.entity_name)
+
+        # for each node type, create a function for initial node embeddings
         self.scalar_embedding = nn.ModuleDict()
-        self.edge_embedding = nn.ModuleDict()
-
         for ntype in self.node_types:
-            i = self.ntype_cat_feats[ntype]
+            n_cat_feats = self.ntype_cat_feats[ntype] # number of categorical features for this node type
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
-                    i * token_dim + self.time_embedding_dim,
+                    n_cat_feats * token_dim + self.time_embedding_dim,
                     n_hidden_scalars,
                 ),
-                nn.SiLU(),
-                nn.Linear(n_hidden_scalars, n_hidden_scalars),
                 nn.SiLU(),
                 nn.LayerNorm(n_hidden_scalars),
             )
 
+        # for each edge type that has edge features, create a function for initial edge embeddings
+        self.edge_embedding = nn.ModuleDict()
         for etype in self.edge_types:
             if self.edge_feat_sizes[etype] > 0:
                 self.edge_embedding[etype] = nn.Sequential(
                     nn.Linear(token_dim, n_hidden_edge_feats),
-                    nn.SiLU(),
-                    nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
                     nn.SiLU(),
                     nn.LayerNorm(n_hidden_edge_feats),
                 )
@@ -178,7 +205,13 @@ class EndpointVectorField(nn.Module):
             n_updaters = n_molecule_updates
         else:
             n_updaters = 1
-        for ntype in self.node_types:
+
+        # for every modality being generated that is a node position, create NodePositionUpdate layers
+        for modality in modalities_generated_cls:
+            is_node_position = modality.graph_entity == "node" and modality.data_key == "x"
+            if not is_node_position:
+                continue
+            ntype = modality.entity_name
             self.node_position_updaters[ntype] = nn.ModuleList()
             for _ in range(n_updaters):
                 self.node_position_updaters[ntype].append(
@@ -190,42 +223,64 @@ class EndpointVectorField(nn.Module):
                     )
                 )
 
-        for etype in self.edge_types:
-            if self.edge_feat_sizes[etype] > 0:
-                self.edge_updaters[etype] = nn.ModuleList()
-                for _ in range(n_updaters):
-                    self.edge_updaters[etype].append(
-                        EdgeUpdate(
-                            n_hidden_scalars,
-                            n_hidden_edge_feats,
-                            update_edge_w_distance=update_edge_w_distance,
-                            rbf_dim=rbf_dim,
-                        )
+        # for every edge modality being generated, create EdgeUpdate layers
+        for modality in modalities_present_cls:
+            if modality.graph_entity != "edge":
+                continue
+            etype = modality.entity_name
+            if self.edge_feat_sizes[etype] == 0: 
+            # skip edges without edge features, although i don't think we shouuld 
+            # have edge features being generated that are empty
+                continue
+            self.edge_updaters[etype] = nn.ModuleList()
+            for _ in range(n_updaters):
+                self.edge_updaters[etype].append(
+                    EdgeUpdate(
+                        n_hidden_scalars,
+                        n_hidden_edge_feats,
+                        update_edge_w_distance=update_edge_w_distance,
+                        rbf_dim=rbf_dim,
                     )
+                )
 
-        self.node_output_heads = (
-            nn.ModuleDict()
-        )  # only need node output heads for cat modalities generated
-        self.edge_output_heads = (
-            nn.ModuleDict()
-        )  # need output head for edge types that we will predict bond order on
+        self.node_output_heads = nn.ModuleDict()
+        # need node output heads for node categorical features and node vector features
+        for modality in modalities_generated_cls:
+            is_node = modality.graph_entity == "node"
+            is_categorical = modality.n_categories and modality.n_categories > 0
+            is_position = modality.data_key == "x"
+            node_categorical = is_node and is_categorical
+            non_position_continuous = is_node and not is_categorical and not is_position
+            if node_categorical:
+                self.node_output_heads[modality.name] = nn.Sequential(
+                    nn.Linear(n_hidden_scalars, n_hidden_scalars),
+                    nn.SiLU(),
+                    nn.Linear(n_hidden_scalars, modality.n_categories),
+                )
+            elif non_position_continuous:
+                # TODO: hard-coded assumption that this situation only applies to pharm 
+                # vector features, need to make this more general
+                # also need to avoid hard-coding number of vec features out
+                # also maybe this should be a 2-layer GVP instead of a 1-layer GVP
+                self.node_output_heads[modality.name] = GVP(
+                    dim_feats_in=n_hidden_scalars,
+                    dim_vectors_in=n_vec_channels,
+                    dim_feats_out=4,
+                    dim_vectors_out=4,
+                )
 
-        for modality_name in DESIGN_SPACE:
-            modality = name_to_modality(modality_name)
-            if modality.graph_entity == "node":
-                if modality.n_categories and modality.n_categories > 0:
-                    self.node_output_heads[modality_name] = nn.Sequential(
-                        nn.Linear(n_hidden_scalars, n_hidden_scalars),
-                        nn.SiLU(),
-                        nn.Linear(n_hidden_scalars, modality.n_categories),
-                    )
-            else:  # edge
-                if modality.n_categories and modality.n_categories > 0:
-                    self.edge_output_heads[modality.entity_name] = nn.Sequential(
-                        nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
-                        nn.SiLU(),
-                        nn.Linear(n_hidden_edge_feats, modality.n_categories),
-                    )
+        self.edge_output_heads = nn.ModuleDict()
+        # need output head for edge types that we will predict bond order on
+        for modality in modalities_generated_cls:
+            is_edge_feat = modality.graph_entity == "edge"
+            is_categorical = modality.n_categories and modality.n_categories > 0
+            if not (is_edge_feat and is_categorical):
+                continue
+            self.edge_output_heads[modality.name] = nn.Sequential(
+                nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
+                nn.SiLU(),
+                nn.Linear(n_hidden_edge_feats, modality.n_categories),
+            )
 
         if self.self_conditioning:
             raise NotImplementedError("Self conditioning not implemented yet")
@@ -297,7 +352,7 @@ class EndpointVectorField(nn.Module):
                 else:  # edge
                     etype = modality.entity_name
                     if self.edge_feat_sizes[etype] > 0 and g.num_edges(etype) > 0:
-                        edge_feats = self.token_embeddings[modality.entity_name](
+                        edge_feats = self.token_embeddings[modality.name](
                             g.edges[etype].data[f"{modality.data_key}_t"]
                         )
                         edge_feats = self.edge_embedding[etype](edge_feats)
@@ -449,29 +504,27 @@ class EndpointVectorField(nn.Module):
 
         logits = {}
         for modality in task_class.modalities_generated:
-            if (
-                modality.graph_entity == "node"
-                and modality.n_categories is not None
-                and modality.n_categories > 0
-            ):
+            is_node = modality.graph_entity == "node"
+            is_categorical = modality.n_categories and modality.n_categories > 0
+            if is_node and is_categorical:
                 ntype = modality.entity_name
                 logits[modality.name] = self.node_output_heads[modality.name](
                     node_scalar_features[ntype]
                 )
-            elif (
-                modality.graph_entity == "edge"
-                and modality.n_categories is not None
-                and modality.n_categories > 0
-            ):
+            elif not is_node and is_categorical:
                 etype = modality.entity_name
                 ue_feats = edge_features[etype][upper_edge_mask[etype]]
                 le_feats = edge_features[etype][~upper_edge_mask[etype]]
-                logits[modality.entity_name] = self.edge_output_heads[
-                    modality.entity_name
+                logits[modality.name] = self.edge_output_heads[
+                    modality.name
                 ](ue_feats + le_feats)
 
         # project node positions back into zero-COM subspace
         if remove_com:
+            raise NotImplementedError("need to do this correctly for hetero")
+            # TODO: operate on nodes present in the graph, not all nodes supported by the model
+            # TODO: can only remove 1 COM per system and everything elsse needs to come with it. I think this currently
+            # removes COM from each node type individually, destroying the structure of the system
             for ntype in self.node_types:
                 if g.num_nodes(ntype) == 0:
                     continue
@@ -488,24 +541,21 @@ class EndpointVectorField(nn.Module):
         dst_dict = {}
         # modalities_present = task_class.modalities_fixed + task_class.modalities_generated
         for modality in task_class.modalities_generated:
-            if modality.graph_entity == "node":
-                ntype = modality.entity_name
-                if modality.data_key == "x":
-                    dst_dict[modality.name] = node_positions[ntype]
-                else:
-                    if apply_softmax:
-                        dst_dict[modality.name] = torch.softmax(
-                            logits[modality.name], dim=-1
-                        )
-                    else:
-                        dst_dict[modality.name] = logits[modality.name]
-            else:  # edge
-                etype = modality.entity_name
-                if apply_softmax:
-                    dst_dict[etype] = torch.softmax(logits[etype], dim=-1)
-                else:
-                    dst_dict[etype] = logits[etype]
 
+            is_node = modality.graph_entity == "node"
+            is_position = modality.data_key == "x"
+            is_categorical = modality.n_categories and modality.n_categories > 0
+
+            if is_position:
+                dst_dict[modality.name] = node_positions[modality.entity_name]
+            elif is_categorical:
+                dst_dict[modality.name] = logits[modality.name]
+                if apply_softmax:
+                    dst_dict[modality.name] = torch.softmax(
+                        dst_dict[modality.name], dim=-1
+                    )
+            else:
+                raise NotImplementedError('i think this only applies to pharm vec features, need to figure this case out')
         # TODO: consider this when doing loss fns (not doing one-hot encoding anymore)
         # NOTE: moved softmax into above loop
         # apply softmax to categorical features, if requested
