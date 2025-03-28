@@ -56,7 +56,7 @@ def train(cfg: DictConfig):
     resume = cfg.get("ckpt_path") is not None
 
 
-    wandb_config = cfg.wandb
+    wandb_config = cfg.wandb_conf
     if resume:
         # if we are resuming, we need to read the run_id from the resume_info.yaml file
         # we also set the run dir to be the previous run directory

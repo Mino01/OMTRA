@@ -146,21 +146,18 @@ class OMTRA(pl.LightningModule):
 
         targets = {}
         for modality in task_class.modalities_generated:
+            is_categorical = modality.n_categories and modality.n_categories > 0
             data_src = g.edges if modality.graph_entity == "edge" else g.nodes
             dk = modality.data_key
             target = data_src[modality.entity_name].data[f"{dk}_1_true"]
             if modality.graph_entity == "edge":
                 target = target[upper_edge_mask[modality.entity_name]]
-            if dk in ["a", "c", "e"]:
+            if is_categorical:
+                xt_idxs = data_src[modality.entity_name].data[f"{dk}_t"]
                 if modality.graph_entity == "edge":
-                    xt_idxs = data_src[modality.entity_name].data[f"{dk}_t"][
-                        upper_edge_mask[modality.entity_name]
-                    ]
-                else:
-                    xt_idxs = data_src[modality.entity_name].data[f"{dk}_t"]
-                target[
-                    xt_idxs != self.n_cat_dict[modality.name]
-                ] = -100  # set the target to ignore_index when the feature is already unmasked in xt
+                    xt_idxs = xt_idxs[upper_edge_mask[modality.entity_name]]
+                # set the target to ignore_index when the feature is already unmasked in xt
+                target[xt_idxs != modality.n_categories] = -100  
             targets[modality.name] = target
 
         if self.time_scaled_loss:
