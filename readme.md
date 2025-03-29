@@ -22,3 +22,8 @@ chmod +x build_env.sh
 - [ ] have we handled pharm vec features appropriately in VF class?
 - [ ] do we initialize pharm vec features?
 - [ ] we don't create node output heads for pharm vec features
+- [ ] task embedding
+- [ ] prot element + name embedding?
+- [ ] are atom name embeddings set correctly? what about residue typing?
+- [ ] need to embed protein types?
+- [ ] how does heterogvpconv create messaging and update functions?
