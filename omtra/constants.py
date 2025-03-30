@@ -133,7 +133,7 @@ residue_map = [
     "MET",
     "LEU",
     "ARG",
-    "UNK",
+    "UNK", # for unkown residue types
 ]
 
 # Taken from DrugFlow aa_atom_index
