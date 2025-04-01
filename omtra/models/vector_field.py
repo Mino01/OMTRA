@@ -1,0 +1,970 @@
+import torch
+import torch.nn as nn
+import dgl
+import dgl.function as fn
+from collections import defaultdict
+from typing import Union, Callable, Dict, Optional
+import scipy
+from typing import List
+from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
+from omtra.models.interpolant_scheduler import InterpolantScheduler
+from omtra.tasks.tasks import Task
+from omtra.tasks.register import task_name_to_class
+from omtra.load.conf import TaskDatasetCoupling
+from omtra.tasks.modalities import (
+    Modality,
+    name_to_modality,
+    MODALITY_ORDER,
+    DESIGN_SPACE,
+)
+from omtra.utils.embedding import get_time_embedding
+from omtra.utils.graph import canonical_node_features
+from omtra.data.graph import to_canonical_etype
+from omtra.constants import (
+    lig_atom_type_map,
+    npnde_atom_type_map,
+    ph_idx_to_type,
+    residue_map,
+    protein_element_map,
+    protein_atom_map,
+)
+
+# TODO: have we handled pharm vec features appropriately?
+# TODO: do we initialize pharm vec features?
+# TODO: we don't create node output heads for pharm vec features
+class EndpointVectorField(nn.Module):
+    def __init__(
+        self,
+        interpolant_scheduler: InterpolantScheduler,
+        td_coupling: TaskDatasetCoupling,
+        n_charges: int = 6,
+        n_bond_types: int = 4,
+        n_vec_channels: int = 16,
+        n_cp_feats: int = 0,
+        n_hidden_scalars: int = 64,
+        n_hidden_edge_feats: int = 64,
+        n_recycles: int = 1,
+        n_molecule_updates: int = 2,
+        convs_per_update: int = 2,
+        n_message_gvps: int = 3,
+        n_update_gvps: int = 3,
+        n_expansion_gvps: int = 3,
+        separate_mol_updaters: bool = False,
+        message_norm: Union[float, str] = 100,
+        update_edge_w_distance: bool = False,
+        rbf_dmax=20,
+        rbf_dim=16,
+        continuous_inv_temp_schedule=None,
+        continuous_inv_temp_max: float = 10.0,
+        time_embedding_dim: int = 64,
+        token_dim: int = 64,
+        attention: bool = False,
+        n_heads: int = 1,
+        s_message_dim: int = None,
+        v_message_dim: int = None,
+        dropout: float = 0.0,
+        has_mask: bool = True,
+        self_conditioning: bool = False,
+        use_dst_feats: bool = False,
+        dst_feat_msg_reduction_factor: float = 4,
+        # if we are using CTMC, input categorical features will have mask tokens,
+        # this means their one-hot representations will have an extra dimension,
+        # and the neural network instantiated by this method need to account for this
+        # it is definitely anti-pattern to have a parameter in parent class that is only needed for one sub-class (CTMCVectorField)
+        # however, this is the fastest way to get CTMCVectorField working right now, so we will be anti-pattern for the sake of time
+    ):
+        super().__init__()
+        self.token_dim = token_dim
+        self.task_embedding_dim = token_dim
+        self.n_hidden_scalars = n_hidden_scalars
+        self.n_hidden_edge_feats = n_hidden_edge_feats
+        self.n_vec_channels = n_vec_channels
+        self.message_norm = message_norm
+        self.n_recycles = n_recycles
+        self.separate_mol_updaters: bool = separate_mol_updaters
+        self.interpolant_scheduler = interpolant_scheduler
+        self.td_coupling: TaskDatasetCoupling = td_coupling
+        self.time_embedding_dim = time_embedding_dim
+        self.self_conditioning = self_conditioning
+        self.has_mask = has_mask
+
+        self.convs_per_update = convs_per_update
+        self.n_molecule_updates = n_molecule_updates
+
+        self.rbf_dmax = rbf_dmax
+        self.rbf_dim = rbf_dim
+
+        assert n_vec_channels >= 3, "n_vec_channels must be >= 3"
+
+        self.continuous_inv_temp_schedule = continuous_inv_temp_schedule
+        self.continouts_inv_temp_max = continuous_inv_temp_max
+        self.continuous_inv_temp_func = self.build_continuous_inv_temp_func(
+            self.continuous_inv_temp_schedule, self.continouts_inv_temp_max
+        )
+
+        self.node_types = set()
+        self.edge_types = set()
+        self.token_embeddings = nn.ModuleDict()
+        self.edge_feat_sizes = defaultdict(int)
+        self.ntype_cat_feats = defaultdict(int)
+
+
+        # get the set of all modalities that will be present in our graphs
+        task_classes = [task_name_to_class(task_name) for task_name in td_coupling.task_space]
+        modality_present_space = set()
+        modality_generated_space = set()
+        for task_class in task_classes:
+            for modality in task_class.modalities_fixed:
+                modality_present_space.add(modality.name)
+            for modality in task_class.modalities_generated:
+                modality_present_space.add(modality.name)
+                modality_generated_space.add(modality.name)
+
+        modalities_present_cls = [name_to_modality(modality_name) for modality_name in modality_present_space]
+        modalities_generated_cls = [name_to_modality(modality_name) for modality_name in modality_generated_space]
+
+        # get the set of all nodes present in our graphs
+        self.node_types = set(m.entity_name for m in modalities_present_cls if m.graph_entity == "node")
+
+        # create token embeddings for all categorical features that we are modeling
+        for m in modalities_present_cls:
+            needs_token_embed = m.n_categories is not None and m.n_categories > 0
+            if not needs_token_embed:
+                continue
+            # if the modality is being generated, there is an extra mask token
+            is_generated = m.name in modality_generated_space
+            self.token_embeddings[m.name] = nn.Embedding(
+                m.n_categories+int(is_generated), token_dim
+            )
+            # record the number of categorical features for each node type, not sure why, keeping tyler's code in place
+            if m.graph_entity == "node":
+                self.ntype_cat_feats[m.entity_name] += 1
+
+        # record modalities that are on edges
+        for modality in modalities_present_cls:
+            if modality.graph_entity != "edge":
+                continue
+            if modality.n_categories is None:
+                raise ValueError("did not expect continuous edge features")
+            self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
+            self.edge_types.add(modality.entity_name)
+
+        # create a task embedding
+        self.task_embedding = nn.Embedding(len(td_coupling.task_space), self.task_embedding_dim)
+
+        # for each node type, create a function for initial node embeddings
+        self.scalar_embedding = nn.ModuleDict()
+        for ntype in self.node_types:
+            n_cat_feats = self.ntype_cat_feats[ntype] # number of categorical features for this node type
+            self.scalar_embedding[ntype] = nn.Sequential(
+                nn.Linear(
+                    n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim, 
+                    n_hidden_scalars,
+                ),
+                nn.SiLU(),
+                nn.LayerNorm(n_hidden_scalars),
+            )
+
+        # for each edge type that has edge features, create a function for initial edge embeddings
+        self.edge_embedding = nn.ModuleDict()
+        for etype in self.edge_types:
+            if self.edge_feat_sizes[etype] > 0:
+                self.edge_embedding[etype] = nn.Sequential(
+                    nn.Linear(token_dim, n_hidden_edge_feats),
+                    nn.SiLU(),
+                    nn.LayerNorm(n_hidden_edge_feats),
+                )
+
+        # TODO: node_types and edge_types used to be like, all the possible node and edge types on which we defined modalities
+        # now they are just node types and edge types that are being supported by this model??? i think?? somehow
+        # we get a HeteroGVPConv that has self.edge_types = 'lig_to_lig` even though we are doing lig+pharm related tasks (should be lig-pharm edges)
+        # but i guess those don't get added because we don't actually maintain features on lig-pharm edges?
+        self.conv_layers = []
+        for conv_idx in range(convs_per_update * n_molecule_updates):
+            self.conv_layers.append(
+                HeteroGVPConv(
+                    node_types=self.node_types,
+                    edge_types=self.edge_types,
+                    scalar_size=n_hidden_scalars,
+                    vector_size=n_vec_channels,
+                    n_cp_feats=n_cp_feats,
+                    edge_feat_size=self.edge_feat_sizes,
+                    n_message_gvps=n_message_gvps,
+                    n_update_gvps=n_update_gvps,
+                    n_expansion_gvps=n_expansion_gvps,
+                    message_norm=message_norm,
+                    rbf_dmax=rbf_dmax,
+                    rbf_dim=rbf_dim,
+                    attention=attention,
+                    n_heads=n_heads,
+                    s_message_dim=s_message_dim,
+                    v_message_dim=v_message_dim,
+                    dropout=dropout,
+                    use_dst_feats=use_dst_feats,
+                    dst_feat_msg_reduction_factor=dst_feat_msg_reduction_factor,
+                )
+            )
+        self.conv_layers = nn.ModuleList(self.conv_layers)
+
+        # create molecule update layers
+        self.node_position_updaters = nn.ModuleDict()
+        self.edge_updaters = nn.ModuleDict()
+        if self.separate_mol_updaters:
+            n_updaters = n_molecule_updates
+        else:
+            n_updaters = 1
+
+        # for every modality being generated that is a node position, create NodePositionUpdate layers
+        for modality in modalities_generated_cls:
+            is_node_position = modality.graph_entity == "node" and modality.data_key == "x"
+            if not is_node_position:
+                continue
+            ntype = modality.entity_name
+            self.node_position_updaters[ntype] = nn.ModuleList()
+            for _ in range(n_updaters):
+                self.node_position_updaters[ntype].append(
+                    NodePositionUpdate(
+                        n_hidden_scalars,
+                        n_vec_channels,
+                        n_gvps=3,
+                        n_cp_feats=n_cp_feats,
+                    )
+                )
+
+        # for every edge modality being generated, create EdgeUpdate layers
+        for modality in modalities_present_cls:
+            if modality.graph_entity != "edge":
+                continue
+            etype = modality.entity_name
+            if self.edge_feat_sizes[etype] == 0: 
+            # skip edges without edge features, although i don't think we shouuld 
+            # have edge features being generated that are empty
+                continue
+            self.edge_updaters[etype] = nn.ModuleList()
+            for _ in range(n_updaters):
+                self.edge_updaters[etype].append(
+                    EdgeUpdate(
+                        n_hidden_scalars,
+                        n_hidden_edge_feats,
+                        update_edge_w_distance=update_edge_w_distance,
+                        rbf_dim=rbf_dim,
+                    )
+                )
+
+        # need node output heads for node categorical features and node vector features.
+        # node positions will be covered by the node update module.
+        # TODO: node position updates interleaved with convs doesn't work well when some nodes are fixed and others are not
+        # we could only support node position updates via a node_output_head...TBD
+        self.node_output_heads = nn.ModuleDict()
+        # loop over modalities on nodes that are being generated
+        for modality in modalities_generated_cls:
+            is_node = modality.graph_entity == "node"
+            if not is_node:
+                continue
+            # if categorical, the output head is just a MLP on node scalar features
+            if modality.is_categorical:
+                self.node_output_heads[modality.name] = nn.Sequential(
+                    nn.Linear(n_hidden_scalars, n_hidden_scalars),
+                    nn.SiLU(),
+                    nn.Linear(n_hidden_scalars, modality.n_categories),
+                )
+            elif modality.data_key == "v": # if a node vector feature
+                # TODO: hard-coded assumption that this situation only applies to pharm 
+                # vector features, need to make this more general
+                # also need to avoid hard-coding number of vec features out
+                # also maybe this should be a 2-layer GVP instead of a 1-layer GVP
+                self.node_output_heads[modality.name] = GVP(
+                    dim_feats_in=n_hidden_scalars,
+                    dim_vectors_in=n_vec_channels,
+                    dim_feats_out=4,
+                    dim_vectors_out=4,
+                )
+            elif modality.data_key == "x": # if a node position, we don't need to do anything to it
+                continue
+            else:
+                raise ValueError('unaccounted for node feature type being generated')
+
+        self.edge_output_heads = nn.ModuleDict()
+        # need output head for edge types that we will predict bond order on
+        for modality in modalities_generated_cls:
+            is_edge_feat = modality.graph_entity == "edge"
+            is_categorical = modality.n_categories and modality.n_categories > 0
+            if not (is_edge_feat and is_categorical):
+                continue
+            self.edge_output_heads[modality.name] = nn.Sequential(
+                nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
+                nn.SiLU(),
+                nn.Linear(n_hidden_edge_feats, modality.n_categories),
+            )
+
+        if self.self_conditioning:
+            raise NotImplementedError("Self conditioning not implemented yet")
+            self.self_conditioning_residual_layer = SelfConditioningResidualLayer(
+                n_atom_types=n_atom_types,
+                n_charges=n_charges,
+                n_bond_types=n_bond_types,
+                node_embedding_dim=n_hidden_scalars,
+                edge_embedding_dim=n_hidden_edge_feats,
+                rbf_dim=rbf_dim,
+                rbf_dmax=rbf_dmax,
+            )
+
+    def build_continuous_inv_temp_func(self, schedule, max_inv_temp=None):
+        if schedule is None:
+            inv_temp_func = lambda t: 1.0
+        elif schedule == "linear":
+            inv_temp_func = lambda t: max_inv_temp * (1 - t)
+        elif callable(schedule):
+            inv_temp_func = schedule
+        else:
+            raise ValueError(f"Invalid continuous_inv_temp_schedule: {schedule}")
+        return inv_temp_func
+
+    def forward(
+        self,
+        g: dgl.DGLGraph,
+        task_class: Task,
+        t: torch.Tensor,
+        node_batch_idx: Dict[str, torch.Tensor],
+        upper_edge_mask: Dict[str, torch.Tensor],
+        apply_softmax=False,
+        remove_com=False,
+        prev_dst_dict=None,
+    ):
+        """Predict x_1 (trajectory destination) given x_t, and, optionally, previous destination features."""
+        device = g.device
+
+        with g.local_scope():
+            node_scalar_features = {}
+            node_positions = {}
+            node_vec_features = {}
+            edge_features = {}
+
+
+            # compose the graph from modalities into the language of the GNN
+            # that is node positions, node scalar features, node vector features, and edge features
+            # our implicit assumption 
+            node_modalities = [m for m in task_class.modalities_present if m.is_node]
+            edge_modalities = [m for m in task_class.modalities_present if not m.is_node]
+
+            # loop over modalities defined on nodes
+            for modality in node_modalities:
+                ntype = modality.entity_name
+                if g.num_nodes(ntype) == 0:
+                    continue
+                if modality.data_key == "x": # set node positions
+                    node_positions[ntype] = g.nodes[ntype].data[
+                        f"{modality.data_key}_t"
+                    ]
+                if modality.data_key == 'v': # set user-provided vector features as initial vector features
+                    vec_features = g.nodes[ntype].data[f"{modality.data_key}_t"] # has shape (n_nodes, n_vecs_per_node, 3)
+                    n, v_in, _ = vec_features.shape
+                    assert self.n_vec_channels >= v_in
+                    # concatenate zeros to the end of the vector features until there are self.n_vec_channels channels
+                    vec_padding = torch.zeros(n, self.n_vec_channels - v_in, 3, device=device, dtype=vec_features.dtype)
+                    vec_features = torch.cat([vec_features, vec_padding], dim=1)
+                    node_vec_features[ntype] = vec_features
+                elif modality.is_categorical: # node categorical features
+                    if ntype not in node_scalar_features:
+                        node_scalar_features[ntype] = []
+                    node_scalar_features[ntype].append(
+                        self.token_embeddings[modality.name](
+                            g.nodes[ntype].data[f"{modality.data_key}_t"]
+                        )
+                    )
+
+            # loop back over node types, and anything without vector features should be given a zero vector
+            for ntype in node_scalar_features.keys():
+                if ntype in node_vec_features:
+                    continue
+                num_nodes = g.num_nodes(ntype)
+                node_vec_features[ntype] = torch.zeros(
+                    (num_nodes, self.n_vec_channels, 3), device=device
+                ).float()
+
+
+            # now lets collect edge features
+            for modality in edge_modalities:
+                etype = modality.entity_name
+                if self.edge_feat_sizes[etype] > 0 and g.num_edges(etype) > 0:
+                    edge_feats = self.token_embeddings[modality.name](
+                        g.edges[etype].data[f"{modality.data_key}_t"]
+                    )
+                    edge_feats = self.edge_embedding[etype](edge_feats)
+                    edge_features[etype] = edge_feats
+
+            # get task embedding
+            task_idx = self.td_coupling.task_space.index(task_class.name) # integer of the task index
+            task_idx = torch.full((g.batch_size,), task_idx, device=device)  # tensor of shape (batch_size) containing the task index
+            task_embedding_batch = self.task_embedding(task_idx) # tensor of shape (batch_size, token_dim)
+
+            # add time and task embedding to node scalar features
+            for ntype in node_scalar_features.keys():
+
+                # add time embedding to node scalar features
+                if self.time_embedding_dim == 1:
+                    node_scalar_features[ntype].append(
+                        t[node_batch_idx[ntype]].unsqueeze(-1)
+                    )
+                else:
+                    t_emb = get_time_embedding(t, embedding_dim=self.time_embedding_dim)
+                    t_emb = t_emb[node_batch_idx[ntype]]
+                    node_scalar_features[ntype].append(t_emb)
+
+                node_scalar_features[ntype].append(
+                    task_embedding_batch[node_batch_idx[ntype]]
+                ) # expand task embedding for each node in the batch
+
+                # concatenate all initial node scalar features and pass through the embedding layer
+                node_scalar_features[ntype] = torch.cat(
+                    node_scalar_features[ntype], dim=-1
+                )
+                node_scalar_features[ntype] = self.scalar_embedding[ntype](
+                    node_scalar_features[ntype]
+                )
+
+            if self.self_conditioning and prev_dst_dict is None:
+                train_self_condition = self.training and (torch.rand(1) > 0.5).item()
+                inference_first_step = not self.training and (t == 0).all().item()
+
+                if train_self_condition or inference_first_step:
+                    with torch.no_grad():
+                        node_scalar_features_clone = {
+                            ntype: feats.clone()
+                            for ntype, feats in node_scalar_features.items()
+                        }
+                        node_vec_features_clone = {
+                            ntype: feats.clone()
+                            for ntype, feats in node_vec_features.items()
+                        }
+                        node_positions_clone = {
+                            ntype: pos.clone() for ntype, pos in node_positions.items()
+                        }
+                        edge_features_clone = {
+                            etype: feats.clone()
+                            for etype, feats in edge_features.items()
+                        }
+
+                        prev_dst_dict = self.denoise_graph(
+                            g,
+                            task_class,
+                            node_scalar_features_clone,
+                            node_vec_features_clone,
+                            node_positions_clone,
+                            edge_features_clone,
+                            node_batch_idx,
+                            upper_edge_mask,
+                            apply_softmax=True,
+                            remove_com=False,
+                        )
+
+            if self.self_conditioning and prev_dst_dict is not None:
+                # TODO: Adapt self-conditioning residual layer for Hetero graph
+                (
+                    node_scalar_features,
+                    node_positions,
+                    node_vec_features,
+                    edge_features,
+                ) = self.self_conditioning_residual_layer(
+                    g,
+                    node_scalar_features,
+                    node_positions,
+                    node_vec_features,
+                    edge_features,
+                    prev_dst_dict,
+                    node_batch_idx,
+                    upper_edge_mask,
+                )
+
+            dst_dict = self.denoise_graph(
+                g,
+                task_class,
+                node_scalar_features,
+                node_vec_features,
+                node_positions,
+                edge_features,
+                node_batch_idx,
+                upper_edge_mask,
+                apply_softmax,
+                remove_com,
+            )
+
+            return dst_dict
+
+    def denoise_graph(
+        self,
+        g: dgl.DGLGraph,
+        task_class: Task,
+        node_scalar_features: Dict[str, torch.Tensor],
+        node_vec_features: Dict[str, torch.Tensor],
+        node_positions: Dict[str, torch.Tensor],
+        edge_features: Dict[str, torch.Tensor],
+        node_batch_idx: Dict[str, torch.Tensor],
+        upper_edge_mask: Dict[str, torch.Tensor],
+        apply_softmax: bool = False,
+        remove_com: bool = False,
+    ):
+        x_diff, d = self.precompute_distances(g)
+        for recycle_idx in range(self.n_recycles):
+            for conv_idx, conv in enumerate(self.conv_layers):
+                # perform a single convolution which updates node scalar and vector features (but not positions)
+                node_scalar_features, node_vec_features = conv(
+                    g,
+                    scalar_feats=node_scalar_features,
+                    coord_feats=node_positions,
+                    vec_feats=node_vec_features,
+                    edge_feats=edge_features,
+                    x_diff=x_diff,
+                    d=d,
+                )
+                # every convs_per_update convolutions, update the node positions and edge features
+                if conv_idx != 0 and (conv_idx + 1) % self.convs_per_update == 0:
+                    if self.separate_mol_updaters:
+                        updater_idx = conv_idx // self.convs_per_update
+                    else:
+                        updater_idx = 0
+
+                    modalities_generated = task_class.modalities_generated
+                    for modality in modalities_generated:
+                        if modality.graph_entity == "node" and modality.data_key == "x":
+                            ntype = modality.entity_name
+                            node_positions[ntype] = self.node_position_updaters[ntype][
+                                updater_idx
+                            ](
+                                node_scalar_features[ntype],
+                                node_positions[ntype],
+                                node_vec_features[ntype],
+                            )
+                        if modality.graph_entity == "edge":
+                            x_diff, d = self.precompute_distances(
+                                g, node_positions
+                            )  # NOTE: consider adding etype arg to precompute dists to avoid recomputing for all etypes
+                            etype = modality.entity_name
+                            edge_features[etype] = self.edge_updaters[etype][
+                                updater_idx
+                            ](
+                                g,
+                                node_scalar_features,
+                                edge_features[etype],
+                                d=d[etype],
+                                etype=etype,
+                            )
+
+        logits = {}
+        for modality in task_class.modalities_generated:
+            is_node = modality.graph_entity == "node"
+            is_categorical = modality.n_categories and modality.n_categories > 0
+            if is_node and is_categorical:
+                ntype = modality.entity_name
+                logits[modality.name] = self.node_output_heads[modality.name](
+                    node_scalar_features[ntype]
+                )
+            elif not is_node and is_categorical:
+                etype = modality.entity_name
+                ue_feats = edge_features[etype][upper_edge_mask[etype]]
+                le_feats = edge_features[etype][~upper_edge_mask[etype]]
+                logits[modality.name] = self.edge_output_heads[
+                    modality.name
+                ](ue_feats + le_feats)
+
+        # project node positions back into zero-COM subspace
+        if remove_com:
+            raise NotImplementedError("need to do this correctly for hetero")
+            # TODO: operate on nodes present in the graph, not all nodes supported by the model
+            # TODO: can only remove 1 COM per system and everything elsse needs to come with it. I think this currently
+            # removes COM from each node type individually, destroying the structure of the system
+            for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
+                g.nodes[ntype].data["x_1_pred"] = node_positions[ntype]
+                g.nodes[ntype].data["x_1_pred"] = (
+                    g.nodes[ntype].data["x_1_pred"]
+                    - dgl.readout_nodes(g, feat="x_1_pred", op="mean", ntype=ntype)[
+                        node_batch_idx[ntype]
+                    ]
+                )
+                node_positions[ntype] = g.nodes[ntype].data["x_1_pred"]
+
+        # build a dictionary of predicted features
+        dst_dict = {}
+        # modalities_present = task_class.modalities_fixed + task_class.modalities_generated
+        for modality in task_class.modalities_generated:
+
+            is_node = modality.graph_entity == "node"
+            is_position = modality.data_key == "x"
+            is_categorical = modality.n_categories and modality.n_categories > 0
+
+            if is_position:
+                dst_dict[modality.name] = node_positions[modality.entity_name]
+            elif is_categorical:
+                dst_dict[modality.name] = logits[modality.name]
+                if apply_softmax:
+                    dst_dict[modality.name] = torch.softmax(
+                        dst_dict[modality.name], dim=-1
+                    )
+            else:
+                raise NotImplementedError('i think this only applies to pharm vec features, need to figure this case out')
+        # TODO: consider this when doing loss fns (not doing one-hot encoding anymore)
+        # NOTE: moved softmax into above loop
+        # apply softmax to categorical features, if requested
+        # at training time, we don't want to apply softmax because we use cross-entropy loss which includes softmax
+        # at inference time, we want to apply softmax to get a vector which lies on the simplex
+
+        return dst_dict
+
+    def precompute_distances(self, g: dgl.DGLGraph, node_positions=None):
+        """Precompute the pairwise distances between all nodes in the graph."""
+        x_diff = {}
+        d = {}
+        with g.local_scope():
+            for ntype in self.node_types:
+                if g.num_nodes(ntype) == 0:
+                    continue
+                if node_positions is None:
+                    g.nodes[ntype].data["x_d"] = g.nodes[ntype].data["x_t"]
+                else:
+                    g.nodes[ntype].data["x_d"] = node_positions[ntype]
+
+            for etype in self.edge_types:
+                if g.num_edges(etype) == 0:
+                    continue
+                g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
+                dij = _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True) + 1e-8
+                x_diff[etype] = g.edges[etype].data["x_diff"] / dij
+                d[etype] = _rbf(
+                    dij.squeeze(1), D_max=self.rbf_dmax, D_count=self.rbf_dim
+                )
+
+        return x_diff, d
+
+    def integrate(
+        self,
+        g: dgl.DGLGraph,
+        node_batch_idx: Dict[str, torch.Tensor],
+        upper_edge_mask: Dict[str, torch.Tensor],
+        n_timesteps: int,
+        visualize=False,
+        **kwargs,
+    ):
+        # TODO: adapt flowmol integrate for hetero version
+        t = torch.linspace(0, 1, n_timesteps, device=g.device)
+
+        # get the corresponding alpha values for each timepoint
+        alpha_t = self.interpolant_scheduler.alpha_t(
+            t
+        )  # has shape (n_timepoints, n_feats)
+        alpha_t_prime = self.interpolant_scheduler.alpha_t_prime(t)
+
+        for ntype, featlist in canonical_node_features.items():
+            for feat in featlist:
+                g.nodes[ntype].data[f"{feat}_t"] = g.nodes[ntype].data[f"{feat}_0"]
+
+        for etype in self.edge_types:
+            g.edges[etype].data["e_t"] = g.edges[etype].data["e_0"]
+
+        if visualize:
+            traj_frames = {}
+            for ntype in self.node_types:
+                split_sizes = g.batch_num_nodes(ntype).detach().cpu().tolist()
+
+                for feat in canonical_node_features[ntype]:
+                    feat_key = f"{ntype}_{feat}"
+                    init_frame = g.nodes[ntype].data[f"{feat}_0"].detach().cpu()
+                    init_frame = torch.split(init_frame, split_sizes)
+                    traj_frames[feat_key] = [init_frame]
+                    traj_frames[f"{feat_key}_1_pred"] = []
+
+            for etype in self.edge_types:
+                split_sizes = g.batch_num_edges(etype).detach().cpu().tolist()
+                init_frame = g.edges[etype].data["e_0"].detach().cpu()
+                init_frame = torch.split(init_frame, split_sizes)
+                traj_frames[etype] = [init_frame]
+                traj_frames[f"{etype}_1_pred"] = []
+
+        dst_dict = None
+        for s_idx in range(1, t.shape[0]):
+            # get the next timepoint (s) and the current timepoint (t)
+            s_i = t[s_idx]
+            t_i = t[s_idx - 1]
+            alpha_t_i = alpha_t[s_idx - 1]
+            alpha_s_i = alpha_t[s_idx]
+            alpha_t_prime_i = alpha_t_prime[s_idx - 1]
+
+            # compute next step and set x_t = x_s
+            g, dst_dict = self.step(
+                g,
+                s_i,
+                t_i,
+                alpha_t_i,
+                alpha_s_i,
+                alpha_t_prime_i,
+                node_batch_idx,
+                upper_edge_mask,
+                prev_dst_dict=dst_dict,
+                **kwargs,
+            )
+
+            if visualize:
+                for ntype in self.node_types:
+                    split_sizes = g.batch_num_nodes(ntype).detach().cpu().tolist()
+
+                    for feat in canonical_node_features[ntype]:
+                        feat_key = f"{ntype}_{feat}"
+                        frame = g.nodes[ntype].data[f"{feat}_t"].detach().cpu()
+                        frame = torch.split(frame, split_sizes)
+                        traj_frames[feat_key].append(frame)
+
+                        ep_key = f"{feat_key}_1_pred"
+                        if f"{feat}_1_pred" in g.nodes[ntype].data:
+                            ep_frame = (
+                                g.nodes[ntype].data[f"{feat}_1_pred"].detach().cpu()
+                            )
+                            ep_frame = torch.split(ep_frame, split_sizes)
+                            traj_frames[ep_key].append(ep_frame)
+
+                for etype in self.edge_types:
+                    split_sizes = g.batch_num_edges(etype).detach().cpu().tolist()
+                    frame = g.edges[etype].data["e_t"].detach().cpu()
+                    frame = torch.split(frame, split_sizes)
+                    traj_frames[etype].append(frame)
+
+                    ep_key = f"{etype}_1_pred"
+                    if "e_1_pred" in g.edges[etype].data:
+                        ep_frame = g.edges[etype].data["e_1_pred"].detach().cpu()
+                        ep_frame = torch.split(ep_frame, split_sizes)
+                        traj_frames[ep_key].append(ep_frame)
+
+        # set x_1 = x_t
+        for ntype in self.node_types:
+            for feat in canonical_node_features[ntype]:
+                g.nodes[ntype].data[f"{feat}_1"] = g.nodes[ntype].data[f"{feat}_t"]
+
+        for etype in self.edge_types:
+            g.edges[etype].data["e_1"] = g.edges[etype].data["e_t"]
+
+        if visualize:
+            # currently, traj_frames[key] is a list of lists. each sublist contains the frame for every molecule in the batch
+            # we want to rearrange this so that traj_frames is a list of dictionaries, where each dictionary contains the frames for a single molecule
+            reshaped_traj_frames = []
+            for sys_idx in range(g.batch_size):
+                system_dict = {}
+                for ntype in self.node_types:
+                    system_dict[ntype] = {}
+                    for feat in canonical_node_features[ntype]:
+                        feat_key = f"{ntype}_{feat}"
+                        if feat_key in traj_frames:
+                            feat_traj = []
+                            n_frames = len(traj_frames[feat_key])
+                            for frame_idx in range(n_frames):
+                                if sys_idx < len(traj_frames[feat_key][frame_idx]):
+                                    feat_traj.append(
+                                        traj_frames[feat_key][frame_idx][sys_idx]
+                                    )
+                            if feat_traj:
+                                system_dict[ntype][feat] = torch.stack(feat_traj)
+                        pred_key = f"{feat_key}_1_pred"
+                        if pred_key in traj_frames and traj_frames[pred_key]:
+                            pred_traj = []
+                            n_frames = len(traj_frames[pred_key])
+                            for frame_idx in range(n_frames):
+                                if sys_idx < len(traj_frames[pred_key][frame_idx]):
+                                    pred_traj.append(
+                                        traj_frames[pred_key][frame_idx][sys_idx]
+                                    )
+                            if pred_traj:
+                                system_dict[ntype][f"{feat}_1_pred"] = torch.stack(
+                                    pred_traj
+                                )
+                system_dict["edges"] = {}
+                for etype in self.edge_types:
+                    if etype in traj_frames:
+                        edge_traj = []
+                        n_frames = len(traj_frames[etype])
+                        for frame_idx in range(n_frames):
+                            if sys_idx < len(traj_frames[etype][frame_idx]):
+                                edge_traj.append(traj_frames[etype][frame_idx][sys_idx])
+                        if edge_traj:
+                            system_dict["edges"][etype] = torch.stack(edge_traj)
+                    pred_key = f"{etype}_1_pred"
+                    if pred_key in traj_frames and traj_frames[pred_key]:
+                        pred_traj = []
+                        n_frames = len(traj_frames[pred_key])
+                        for frame_idx in range(n_frames):
+                            if sys_idx < len(traj_frames[pred_key][frame_idx]):
+                                pred_traj.append(
+                                    traj_frames[pred_key][frame_idx][sys_idx]
+                                )
+                        if pred_traj:
+                            system_dict["edges"][f"{etype}_1_pred"] = torch.stack(
+                                pred_traj
+                            )
+                reshaped_traj_frames.append(system_dict)
+            return g, reshaped_traj_frames
+
+        return g
+
+    def step(
+        self,
+        g: dgl.DGLGraph,
+        s_i: torch.Tensor,
+        t_i: torch.Tensor,
+        alpha_t_i: Dict[str, torch.Tensor],
+        alpha_s_i: Dict[str, torch.Tensor],
+        alpha_t_prime_i: Dict[str, torch.Tensor],
+        node_batch_idx: Dict[str, torch.Tensor],
+        upper_edge_mask: Dict[str, torch.Tensor],
+        prev_dst_dict: Dict,
+        inv_temp_func=None,
+        **kwargs,
+    ):
+        if inv_temp_func is None:
+            inv_temp_func = self.continuous_inv_temp_func
+
+        # predict the destination of the trajectory given the current timepoint
+        dst_dict = self(
+            g,
+            t=torch.full((g.batch_size,), t_i, device=g.device),
+            node_batch_idx=node_batch_idx,
+            upper_edge_mask=upper_edge_mask,
+            apply_softmax=True,
+            remove_com=True,
+            prev_dst_dict=prev_dst_dict,
+        )
+
+        # compute x_s for each feature and set x_t = x_s
+        for ntype in self.node_types:
+            for feat in canonical_node_features[ntype]:
+                x_t = g.nodes[ntype].data[f"{feat}_t"]
+                x_1 = dst_dict["nodes"][ntype][feat]
+
+                # evaluate the vector field at the current timepoint
+                vf = self.vector_field(
+                    x_t,
+                    x_1,
+                    alpha_t_i[f"{ntype}_{feat}"],
+                    alpha_t_prime_i[f"{ntype}_{feat}"],
+                )
+
+                # apply temperature scaling
+                vf = vf * inv_temp_func(t_i)
+
+                # apply euler integration step
+                x_s = x_t + vf * (s_i - t_i)
+
+                # record predicted endoint, for visualization purposes
+                g.nodes[ntype].data[f"{feat}_1_pred"] = x_1.detach().clone()
+
+                # record updated feature in the graph
+                g.nodes[ntype].data[f"{feat}_t"] = x_s
+
+        for etype in self.edge_types:
+            x_t = g.edges[etype].data["e_t"]
+            x_t = x_t[upper_edge_mask[etype]]
+
+            x_1 = dst_dict["edges"][etype]
+
+            vf = self.vector_field(x_t, x_1, alpha_t_i[etype], alpha_t_prime_i[etype])
+            # apply temperature scaling
+            vf = vf * inv_temp_func(t_i)
+
+            # apply euler integration step
+            x_s = x_t + vf * (s_i - t_i)
+
+            # set the edge features so that corresponding upper and lower triangle edges have the same value
+            e_s = torch.zeros_like(g.edges[etype].data["e_0"])
+            e_s[upper_edge_mask[etype]] = x_s
+            e_s[~upper_edge_mask[etype]] = x_s
+            x_s = e_s
+
+            e_1 = torch.zeros_like(g.edges[etype].data["e_0"])
+            e_1[upper_edge_mask[etype]] = dst_dict["edges"][etype]
+            e_1[~upper_edge_mask[etype]] = dst_dict["edges"][etype]
+            x_1 = e_1
+
+            # record predicted endoint, for visualization purposes
+            g.edges[etype].data[f"e_1_pred"] = x_1.detach().clone()
+
+            # record updated feature in the graph
+            g.edges[etype].data[f"e_t"] = x_s
+
+        return g, dst_dict
+
+    def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):
+        vf = alpha_t_prime / (1 - alpha_t) * (x_1 - x_t)
+        return vf
+
+
+class NodePositionUpdate(nn.Module):
+    def __init__(self, n_scalars, n_vec_channels, n_gvps: int = 3, n_cp_feats: int = 0):
+        super().__init__()
+
+        self.gvps = []
+        for i in range(n_gvps):
+            if i == n_gvps - 1:
+                vectors_out = 1
+                vectors_activation = nn.Identity()
+            else:
+                vectors_out = n_vec_channels
+                vectors_activation = nn.Sigmoid()
+
+            self.gvps.append(
+                GVP(
+                    dim_feats_in=n_scalars,
+                    dim_feats_out=n_scalars,
+                    dim_vectors_in=n_vec_channels,
+                    dim_vectors_out=vectors_out,
+                    n_cp_feats=n_cp_feats,
+                    vectors_activation=vectors_activation,
+                )
+            )
+        self.gvps = nn.Sequential(*self.gvps)
+
+    def forward(
+        self, scalars: torch.Tensor, positions: torch.Tensor, vectors: torch.Tensor
+    ):
+        _, vector_updates = self.gvps((scalars, vectors))
+        return positions + vector_updates.squeeze(1)
+
+
+class EdgeUpdate(nn.Module):
+    def __init__(
+        self,
+        n_node_scalars,
+        n_edge_feats,
+        update_edge_w_distance=False,
+        rbf_dim=16,
+    ):
+        super().__init__()
+
+        self.update_edge_w_distance = update_edge_w_distance
+
+        input_dim = n_node_scalars * 2 + n_edge_feats
+        if update_edge_w_distance:
+            input_dim += rbf_dim
+
+        self.edge_update_fn = nn.Sequential(
+            nn.Linear(input_dim, n_edge_feats),
+            nn.SiLU(),
+            nn.Linear(n_edge_feats, n_edge_feats),
+            nn.SiLU(),
+        )
+        self.edge_norm = nn.LayerNorm(n_edge_feats)
+
+    def forward(self, g: dgl.DGLGraph, node_scalars, edge_feats, d, etype):
+        src_ntype, _, dst_ntype = to_canonical_etype(etype)
+        # get indicies of source and destination nodes
+        src_idxs, dst_idxs = g.edges(etype=etype)
+
+        mlp_inputs = [
+            node_scalars[src_ntype][src_idxs],
+            node_scalars[dst_ntype][dst_idxs],
+            edge_feats,
+        ]
+
+        if self.update_edge_w_distance and d is not None:
+            mlp_inputs.append(d)
+
+        edge_feats = self.edge_norm(
+            edge_feats + self.edge_update_fn(torch.cat(mlp_inputs, dim=-1))
+        )
+        return edge_feats

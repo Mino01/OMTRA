@@ -1,6 +1,8 @@
 omtra_pipelines/pharmit_dataset/pharmit_small/
 omtra_pipelines/pharmit_dataset/outputs/
 data/pharmit_dev/
+data/plinder/
+data/pharmit/
 local/
 .vscode/
 wandb/

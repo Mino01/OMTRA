@@ -1,14 +1,25 @@
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional
+from omtra.utils.misc import classproperty
+from omtra.constants import (
+    lig_atom_type_map,
+    charge_map,
+    npnde_atom_type_map,
+    ph_idx_to_type,
+    residue_map,
+    protein_element_map,
+    protein_atom_map,
+)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Modality:
     name: str
     group: str
     graph_entity: str
     entity_name: str
     data_key: str
+    n_categories: Optional[int] = None # None if continuous, else number of categories
 
     @classmethod
     def register(cls, register: Dict[str, "Modality"], **kwargs):
@@ -19,6 +30,18 @@ class Modality:
             raise ValueError(f"Modality with name {key} already exists in register.")
 
         register[key] = cls(**kwargs)
+    
+    @property
+    def is_categorical(self) -> bool:
+        """Checks if the modality is categorical."""
+        # TODO: whats going on with n_categories == 0? why we doing that?
+        return self.n_categories is not None and self.n_categories > 0
+    
+    @property
+    def is_node(self) -> bool:
+        """Checks if the modality is defined on nodes."""
+        return self.graph_entity == 'node'
+    
 
 MODALITY_REGISTER: Dict[str, Modality] = {}
 
@@ -35,7 +58,8 @@ Modality.register(MODALITY_REGISTER,
     group='ligand_identity',
     graph_entity='node',
     entity_name='lig',
-    data_key='a'
+    data_key='a',
+    n_categories=len(lig_atom_type_map)
 )
 
 Modality.register(MODALITY_REGISTER,
@@ -43,7 +67,8 @@ Modality.register(MODALITY_REGISTER,
     group='ligand_identity',
     graph_entity='node',
     entity_name='lig',
-    data_key='c'
+    data_key='c',
+    n_categories=len(charge_map)
 )
 
 Modality.register(MODALITY_REGISTER,
@@ -51,7 +76,8 @@ Modality.register(MODALITY_REGISTER,
     group='ligand_identity',
     graph_entity='edge',
     entity_name='lig_to_lig',
-    data_key='e'
+    data_key='e',
+    n_categories=4, # TODO: consider adding ligand_bond_types to constants.py and use that
 )
 
 Modality.register(MODALITY_REGISTER,
@@ -67,7 +93,8 @@ Modality.register(MODALITY_REGISTER,
     group='pharmacophore',
     graph_entity='node',
     entity_name='pharm',
-    data_key='a'
+    data_key='a',
+    n_categories=len(ph_idx_to_type)
 )
 
 Modality.register(MODALITY_REGISTER,
@@ -91,14 +118,33 @@ Modality.register(MODALITY_REGISTER,
     group='protein_identity',
     graph_entity='node',
     entity_name='prot_atom',
-    data_key='e'
+    data_key='e',
+    n_categories=len(protein_element_map),
 )
 Modality.register(MODALITY_REGISTER,
     name='prot_atom_name',
     group='protein_identity',
     graph_entity='node',
     entity_name='prot_atom',
-    data_key='a'
+    data_key='a',
+    n_categories=len(protein_atom_map),
+)
+Modality.register(MODALITY_REGISTER,
+    name='prot_atom_e',
+    group='protein_identity',
+    graph_entity='edge',
+    entity_name='prot_atom_to_prot_atom',
+    data_key='e',
+    n_categories=0, 
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='prot_atom_lig_e',
+    group='protein_identity', #TODO: this was ligand_identity, but that doesn't work for unconditional generation
+    graph_entity='edge',
+    entity_name='prot_atom_to_lig',
+    data_key='e',
+    n_categories=2,  # covalent/proximity
 )
 
 Modality.register(MODALITY_REGISTER,
@@ -115,14 +161,16 @@ Modality.register(MODALITY_REGISTER,
     group='protein_identity',
     graph_entity='node',
     entity_name='npnde',
-    data_key='a'
+    data_key='a',
+    n_categories=len(npnde_atom_type_map)
 )
 Modality.register(MODALITY_REGISTER,
     name='npnde_c',
     group='protein_identity',
     graph_entity='node',
     entity_name='npnde',
-    data_key='c'
+    data_key='c',
+    n_categories=len(charge_map)
 )
 
 # TODO: is it really necessary to model bond orders in npndes? maybe just sparse?
@@ -131,11 +179,22 @@ Modality.register(MODALITY_REGISTER,
     group='protein_identity',
     graph_entity='edge',
     entity_name='npnde_to_npnde',
-    data_key='e'
+    data_key='e',
+    n_categories=4, # TODO: either use edge types from constants or dont use edge types at all for npndes
+)
+
+Modality.register(MODALITY_REGISTER,
+    name='prot_atom_npnde_e',
+    group='protein_identity',
+    graph_entity='edge',
+    entity_name='prot_atom_to_npnde',
+    data_key='e',
+    n_categories=2, # covalent/proximity
 )
 
 MODALITY_ORDER = [modality.name for modality in MODALITY_REGISTER.values()]
 GROUP_SPACE = set([modality.group for modality in MODALITY_REGISTER.values()])
+DESIGN_SPACE = set([modality.name for modality in MODALITY_REGISTER.values() if (modality.group not in ["protein_identity"])])
 
 def name_to_modality(name: str) -> Modality:
     return MODALITY_REGISTER[name]

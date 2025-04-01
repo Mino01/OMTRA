@@ -2,11 +2,11 @@ defaults:
   - _self_
   - model: default
   - trainer: default
-  - task_group: no_protein
+  - task_group: protein
   - graph: default
   - prior: default
   - callbacks: default
-  - wandb: default
+  - wandb_conf: default
 
 seed: 42
 

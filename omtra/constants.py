@@ -7,6 +7,7 @@ ph_idx_to_type = [
     "Hydrophobic",
     "Halogen",
 ]
+charge_map = [-3, -2, -1, 0, 1, 2, 3, 5]
 
 ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}
 
@@ -132,7 +133,7 @@ residue_map = [
     "MET",
     "LEU",
     "ARG",
-    "UNK",
+    "UNK", # for unkown residue types
 ]
 
 # Taken from DrugFlow aa_atom_index

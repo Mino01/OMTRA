@@ -5,6 +5,7 @@ from omegaconf import DictConfig
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.constants import (
     lig_atom_type_map,
+    charge_map,
     npnde_atom_type_map,
     ph_idx_to_type,
     aa_substitutions,
@@ -13,7 +14,7 @@ from omtra.constants import (
     protein_atom_map,
 )
 from omtra.data.graph import build_complex_graph
-from omtra.data.graph import edge_builders
+from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
@@ -36,6 +37,7 @@ import functools
 class PlinderDataset(ZarrDataset):
     def __init__(
         self,
+        link_version: str,
         split: str,
         processed_data_dir: str,
         graphs_per_chunk: int = 1,
@@ -43,7 +45,8 @@ class PlinderDataset(ZarrDataset):
         prior_config: Optional[DictConfig] = None,
         include_pharmacophore: bool = False,
     ):
-        super().__init__(split, processed_data_dir)
+        super().__init__(split, f"{processed_data_dir}/{link_version}" if link_version else f"{processed_data_dir}/no_links")
+        self.link_version = link_version
         self.graphs_per_chunk = graphs_per_chunk
         self.graph_config = graph_config
         self.prior_config = prior_config
@@ -57,13 +60,6 @@ class PlinderDataset(ZarrDataset):
         }
         self.encode_residue = {res: i for i, res in enumerate(residue_map)}
         self.encode_atom = {atom: i for i, atom in enumerate(protein_atom_map)}
-        self.n_categories_dict = {
-            'lig_a': len(lig_atom_type_map),
-            # 'lig_c': len(lig_c_idx_to_val),
-            'lig_c': 10, # TODO: change this later just for debugging
-            'lig_e': 4, # hard-coded assumption of 4 bond types (none, single, double, triple)
-            'pharm_a': len(ph_idx_to_type),
-        }
 
     @classproperty
     def name(cls):
@@ -124,37 +120,38 @@ class PlinderDataset(ZarrDataset):
             self.system_lookup["system_idx"] == index
         ].iloc[0]
 
-        rec_start, rec_end = system_info["rec_start"], system_info["rec_end"]
+        rec_start, rec_end = int(system_info["rec_start"]), int(system_info["rec_end"])
         backbone_start, backbone_end = (
-            system_info["backbone_start"],
-            system_info["backbone_end"],
+            int(system_info["backbone_start"]),
+            int(system_info["backbone_end"]),
         )
 
         lig_atom_start, lig_atom_end = (
-            system_info["lig_atom_start"],
-            system_info["lig_atom_end"],
+            int(system_info["lig_atom_start"]),
+            int(system_info["lig_atom_end"]),
         )
         lig_bond_start, lig_bond_end = (
-            system_info["lig_bond_start"],
-            system_info["lig_bond_end"],
+            int(system_info["lig_bond_start"]),
+            int(system_info["lig_bond_end"]),
         )
 
         pocket_start, pocket_end = (
-            system_info["pocket_start"],
-            system_info["pocket_end"],
+            int(system_info["pocket_start"]),
+            int(system_info["pocket_end"]),
         )
         pocket_bb_start, pocket_bb_end = (
-            system_info["pocket_bb_start"],
-            system_info["pocket_bb_end"],
+            int(system_info["pocket_bb_start"]),
+            int(system_info["pocket_bb_end"]),
         )
 
-        link_start, link_end = system_info["link_start"], system_info["link_end"]
-        link_bb_start, link_bb_end = (
-            system_info["link_bb_start"],
-            system_info["link_bb_end"],
-        )
         link_type = system_info["link_type"]
-
+        if link_type:
+            link_start, link_end = int(system_info["link_start"]), int(system_info["link_end"])
+            link_bb_start, link_bb_end = (
+                int(system_info["link_bb_start"]),
+                int(system_info["link_bb_end"]),
+            )
+        
         backbone = BackboneData(
             coords=self.slice_array(
                 "receptor/backbone_coords", backbone_start, backbone_end
@@ -164,27 +161,21 @@ class PlinderDataset(ZarrDataset):
             ),
             res_names=self.slice_array(
                 "receptor/backbone_res_names", backbone_start, backbone_end
-            ).astype(str),
+            ),
             chain_ids=self.slice_array(
                 "receptor/backbone_chain_ids", backbone_start, backbone_end
-            ).astype(str),
+            ),
         )
 
         receptor = StructureData(
             coords=self.slice_array("receptor/coords", rec_start, rec_end),
             atom_names=self.slice_array(
                 "receptor/atom_names", rec_start, rec_end
-            ).astype(str),
-            elements=self.slice_array("receptor/elements", rec_start, rec_end).astype(
-                str
             ),
+            elements=self.slice_array("receptor/elements", rec_start, rec_end),
             res_ids=self.slice_array("receptor/res_ids", rec_start, rec_end),
-            res_names=self.slice_array("receptor/res_names", rec_start, rec_end).astype(
-                str
-            ),
-            chain_ids=self.slice_array("receptor/chain_ids", rec_start, rec_end).astype(
-                str
-            ),
+            res_names=self.slice_array("receptor/res_names", rec_start, rec_end),
+            chain_ids=self.slice_array("receptor/chain_ids", rec_start, rec_end),
             backbone_mask=self.slice_array(
                 "receptor/backbone_mask", rec_start, rec_end
             ),
@@ -241,27 +232,27 @@ class PlinderDataset(ZarrDataset):
             ),
             res_names=self.slice_array(
                 "pocket/backbone_res_names", pocket_bb_start, pocket_bb_end
-            ).astype(str),
+            ),
             chain_ids=self.slice_array(
                 "pocket/backbone_chain_ids", pocket_bb_start, pocket_bb_end
-            ).astype(str),
+            ),
         )
 
         pocket = StructureData(
             coords=self.slice_array("pocket/coords", pocket_start, pocket_end),
             atom_names=self.slice_array(
                 "pocket/atom_names", pocket_start, pocket_end
-            ).astype(str),
+            ),
             elements=self.slice_array(
                 "pocket/elements", pocket_start, pocket_end
-            ).astype(str),
+            ),
             res_ids=self.slice_array("pocket/res_ids", pocket_start, pocket_end),
             res_names=self.slice_array(
                 "pocket/res_names", pocket_start, pocket_end
-            ).astype(str),
+            ),
             chain_ids=self.slice_array(
                 "pocket/chain_ids", pocket_start, pocket_end
-            ).astype(str),
+            ),
             backbone_mask=self.slice_array(
                 "pocket/backbone_mask", pocket_start, pocket_end
             ),
@@ -284,26 +275,24 @@ class PlinderDataset(ZarrDataset):
                 ),
                 res_names=self.slice_array(
                     "apo/backbone_res_names", link_bb_start, link_bb_end
-                ).astype(str),
+                ),
                 chain_ids=self.slice_array(
                     "apo/backbone_chain_ids", link_bb_start, link_bb_end
-                ).astype(str),
+                ),
             )
             apo = StructureData(
                 coords=self.slice_array("apo/coords", link_start, link_end),
                 atom_names=self.slice_array(
                     "apo/atom_names", link_start, link_end
-                ).astype(str),
-                elements=self.slice_array("apo/elements", link_start, link_end).astype(
-                    str
                 ),
+                elements=self.slice_array("apo/elements", link_start, link_end),
                 res_ids=self.slice_array("apo/res_ids", link_start, link_end),
                 res_names=self.slice_array(
                     "apo/res_names", link_start, link_end
-                ).astype(str),
+                ),
                 chain_ids=self.slice_array(
                     "apo/chain_ids", link_start, link_end
-                ).astype(str),
+                ),
                 cif=system_info["link_cif"],
                 backbone_mask=self.slice_array(
                     "apo/backbone_mask", link_start, link_end
@@ -320,26 +309,24 @@ class PlinderDataset(ZarrDataset):
                 ),
                 res_names=self.slice_array(
                     "pred/backbone_res_names", link_bb_start, link_bb_end
-                ).astype(str),
+                ),
                 chain_ids=self.slice_array(
                     "pred/backbone_chain_ids", link_bb_start, link_bb_end
-                ).astype(str),
+                ),
             )
             pred = StructureData(
                 coords=self.slice_array("pred/coords", link_start, link_end),
                 atom_names=self.slice_array(
                     "pred/atom_names", link_start, link_end
-                ).astype(str),
-                elements=self.slice_array("pred/elements", link_start, link_end).astype(
-                    str
                 ),
+                elements=self.slice_array("pred/elements", link_start, link_end),
                 res_ids=self.slice_array("pred/res_ids", link_start, link_end),
                 res_names=self.slice_array(
                     "pred/res_names", link_start, link_end
-                ).astype(str),
+                ),
                 chain_ids=self.slice_array(
                     "pred/chain_ids", link_start, link_end
-                ).astype(str),
+                ),
                 cif=system_info["link_cif"],
                 backbone_mask=self.slice_array(
                     "pred/backbone_mask", link_start, link_end
@@ -452,8 +439,8 @@ class PlinderDataset(ZarrDataset):
 
         node_data["prot_atom"] = {
             "x_1_true": prot_coords,
-            "a": prot_atom_names,
-            "e": prot_elements,
+            "a_1_true": prot_atom_names,
+            "e_1_true": prot_elements,
             "res_id": prot_res_ids,
             "res_names": prot_res_names,
             "chain_id": prot_chain_ids,
@@ -484,7 +471,7 @@ class PlinderDataset(ZarrDataset):
         node_data["prot_res"] = {
             "x_1_true": backbone_coords,
             "res_id": backbone_res_ids,
-            "a": backbone_res_names,
+            "a_1_true": backbone_res_names,
             "chain_id": backbone_chain_ids,
             "pocket_mask": backbone_pocket_mask,
         }
@@ -497,7 +484,16 @@ class PlinderDataset(ZarrDataset):
         )
 
         return node_data, edge_idxs, edge_data
-
+    
+    def encode_charges(self, charges: torch.Tensor) -> torch.Tensor:
+        # TODO: find real solution to this later
+        charge_type_map = {charge: i for i, charge in enumerate(charge_map)}
+        encoded_charges = []
+        for charge in charges:
+            if charge not in charge_type_map:
+                encoded_charges.append(len(charge_map))
+        return torch.Tensor(encoded_charges).long()
+    
     def convert_ligand(
         self,
         ligand: LigandData,
@@ -522,7 +518,8 @@ class PlinderDataset(ZarrDataset):
         lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(
             coords, atom_types, atom_charges, bond_types, bond_indices
         )
-
+        
+        lig_c = self.encode_charges(lig_c)
         node_data = {
             "lig": {
                 "x_1_true": lig_x,
@@ -610,7 +607,7 @@ class PlinderDataset(ZarrDataset):
                 # TODO: covalent edge feature
                 edge_data["prot_atom_to_lig"] = {
                     "e_1_true": torch.ones(
-                        (prot_atom_to_lig_tensor.shape[1], 1), dtype=torch.float
+                        (prot_atom_to_lig_tensor.shape[1], 1), dtype=torch.long
                     )
                 }
 
@@ -622,7 +619,7 @@ class PlinderDataset(ZarrDataset):
                 # TODO: covalent edge feature
                 edge_data["prot_res_to_lig"] = {
                     "e_1_true": torch.ones(
-                        (prot_res_to_lig_tensor.shape[1], 1), dtype=torch.float
+                        (prot_res_to_lig_tensor.shape[1], 1), dtype=torch.long
                     )
                 }
 
@@ -656,7 +653,7 @@ class PlinderDataset(ZarrDataset):
             prot_to_lig_tensor = torch.tensor(prot_to_lig_edges, dtype=torch.long).t()
             edge_idxs["prot_atom_to_lig"] = prot_to_lig_tensor
             edge_data["prot_atom_to_lig"] = {
-                "e": torch.zeros((prot_to_lig_tensor.shape[1], 1), dtype=torch.float)
+                "e_1_true": torch.zeros((prot_to_lig_tensor.shape[1], 1), dtype=torch.long)
             }
         
         return node_data, edge_idxs, edge_data
@@ -673,7 +670,9 @@ class PlinderDataset(ZarrDataset):
         node_data, edge_data, edge_idxs = {}, {}, {}
         node_data["npnde"] = {"x_1_true": torch.empty(0), "a_1_true": torch.empty(0), "c_1_true": torch.empty(0)}
         edge_data["npnde_to_npnde"] = {"e_1_true": torch.empty(0)}
+        edge_data["prot_atom_to_npnde"] = {"e_1_true": torch.empty(0)}
         edge_idxs["npnde_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["prot_atom_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
 
         if not npndes:
             return node_data, edge_idxs, edge_data
@@ -808,6 +807,7 @@ class PlinderDataset(ZarrDataset):
                 combined_bond_types,
                 combined_bond_indices,
             )
+            npnde_c = self.encode_charges(npnde_c)
 
             node_data["npnde"] = {"x_1_true": npnde_x, "a_1_true": npnde_a, "c_1_true": npnde_c}
 
@@ -815,6 +815,7 @@ class PlinderDataset(ZarrDataset):
 
             edge_idxs["npnde_to_npnde"] = npnde_edge_idxs
         else:
+            combined_atom_charges = self.encode_charges(combined_atom_charges)
             node_data["npnde"] = {
                 "x_1_true": combined_coords,
                 "a_1_true": combined_atom_types,
@@ -829,7 +830,7 @@ class PlinderDataset(ZarrDataset):
             # TODO: covalent edge feature
             edge_data["prot_atom_to_npnde"] = {
                 "e_1_true": torch.ones(
-                    (prot_atom_to_npnde_tensor.shape[1], 1), dtype=torch.float
+                    (prot_atom_to_npnde_tensor.shape[1], 1), dtype=torch.long
                 )
             }
 
@@ -841,7 +842,7 @@ class PlinderDataset(ZarrDataset):
             # TODO: covalent edge feature
             edge_data["prot_res_to_npnde"] = {
                 "e_1_true": torch.ones(
-                    (prot_res_to_npnde_tensor.shape[1], 1), dtype=torch.float
+                    (prot_res_to_npnde_tensor.shape[1], 1), dtype=torch.long
                 )
             }
 
@@ -948,12 +949,11 @@ class PlinderDataset(ZarrDataset):
                 else:
                     raise ValueError("system.link is None, cannot retrieve link coordinates.")
             else:
-                print(modality.entity_name)
                 target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
 
             # if the prior is masked, we need to pass the number of categories for this modality to the prior function
             if prior_name == 'masked':
-                prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict[modality_name])
+                prior_func = functools.partial(prior_func, n_categories=modality.n_categories)
 
             # draw a sample from the prior
             prior_sample = prior_func(target_data)
@@ -970,7 +970,7 @@ class PlinderDataset(ZarrDataset):
 
         return g
 
-    def retrieve_graph_chunks(self, apo_systems: bool = False):
+    def retrieve_graph_chunks(self, frac_start, frac_end, apo_systems: bool = False):
         """
         This dataset contains len(self) examples. We divide all samples (or, graphs) into separate chunk.
         We call these "graph chunks"; this is not the same thing as chunks defined in zarr arrays.
@@ -981,9 +981,9 @@ class PlinderDataset(ZarrDataset):
 
         n_chunks = n_even_chunks + int(n_graphs_in_last_chunk > 0)
 
-        raise NotImplementedError(
-            "need to build capability to modify chunks based on whether or not the task uses the apo state"
-        )
+        # raise NotImplementedError(
+        #     "need to build capability to modify chunks based on whether or not the task uses the apo state"
+        # )
 
         # construct a tensor containing the index ranges for each chunk
         chunk_index = torch.zeros(n_chunks, 2, dtype=torch.int64)
@@ -993,7 +993,7 @@ class PlinderDataset(ZarrDataset):
 
         return chunk_index
 
-    def get_num_nodes(self, task: Task, start_idx, end_idx):
+    def get_num_nodes(self, task: Task, start_idx, end_idx, per_ntype=False):
         # here, unlike in other places, start_idx and end_idx are
         # indexes into the system_lookup array, not a node/edge data array
 
@@ -1055,10 +1055,40 @@ class PlinderDataset(ZarrDataset):
                 )
 
         node_counts.append(counts)
+        
+        if per_ntype:
+            num_nodes_dict = {ntype: ncount for ntype, ncount in zip(node_types, node_counts)}
+            return num_nodes_dict
 
         node_counts = np.stack(node_counts, axis=0).sum(axis=0)
         node_counts = torch.from_numpy(node_counts)
         return node_counts
+    
+    @functools.lru_cache(1024*1024)
+    def get_num_edges(self, task: Task, start_idx, end_idx):
+        # here, unlike in other places, start_idx and end_idx are 
+        # indexes into the graph_lookup array, not a node/edge data array
 
-    def get_num_edges(self, task: Task, start_idx: int, end_idx: int):
-        pass
+        # get number of nodes in each graph, per node type
+        n_nodes_dict = self.get_num_nodes(task, start_idx, end_idx, per_ntype=True)
+        node_types, n_nodes_per_type = zip(*n_nodes_dict.items())
+
+        # evaluate same-ntype edges
+        n_edges_total = torch.zeros(end_idx - start_idx, dtype=torch.int64)
+        for ntype, n_nodes in zip(node_types, n_nodes_per_type):
+            etype = f'{ntype}_to_{ntype}'
+            n_edges = approx_n_edges(etype, self.graph_config, n_nodes_dict)
+            n_edges_total += n_edges
+
+        # cover cross-ntype edges
+        # there are many problems in how we do this; the user needs to specify configs
+        # exactly right or we could end up miscounting edges here, so...tbd
+        # TODO: lig_to_pharm symmetry may be less desireable than pharm_to_lig symmetry
+        if len(node_types) == 2:
+            assert 'lig_to_pharm' in self.graph_config.symmetric_etypes
+            n_edges = approx_n_edges('lig_to_pharm', self.graph_config, n_nodes_dict)
+            n_edges_total += n_edges*2
+            
+
+        return n_edges_total
+        
