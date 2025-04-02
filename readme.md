@@ -16,7 +16,7 @@ chmod +x build_env.sh
 
 # TODO:
 - [ ] npnde edges? don't want fully connected self-edges, only bonds may be insufficient
-- [ ] we don't create node output heads for pharm vec features
+- [ ] node output heads for pharm vec features!!!!!!!!!
 - [ ] residue type as node feature?
 - [ ] add covalent edge types to omtra/data/graph/__init__.py
 - [ ] remove edges with n_categories=0 from moadlities

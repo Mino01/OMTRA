@@ -31,6 +31,7 @@ class SelfConditioningResidualLayer(nn.Module):
 
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
+        self.n_pharmvec_channels = n_pharmvec_channels
 
         modalities_present = [m 
             for task_name in td_coupling.task_space
@@ -103,19 +104,27 @@ class SelfConditioningResidualLayer(nn.Module):
                 continue
             ntype = m.entity_name
             if m.data_key == 'x':
-                # for positions, we add the distance to the final position and the initial position
-                dij = x_t[ntype] - dst_dict[m.name]
+                # for positions, the distance to the final position and the initial position
+                # is used to update node scalar features
+                x_diff = dst_dict[m.name] - x_t[ntype]
                 dij = _norm_no_nan(dij, keepdims=True)
-                dij = _rbf(dij, D_max=self.rbf_dmax, D_count=self.rbf_dim)
-                node_res_input = self.t1_embedding_fns[m.name](dij)
+                dij_rbf = _rbf(dij, D_max=self.rbf_dmax, D_count=self.rbf_dim)
+                node_res_input = self.t1_embedding_fns[m.name](dij_rbf)
+
+                # also, the displacement vector is used to update node vector features
+                v_t[ntype][:, -1, :] = x_diff / dij
             elif m.data_key == 'v':
-                # for vectors, we add pairwise distances between vector features, between t=t and t=1
+                # for vectors, pairwise distances between vector features are used
+                # to update node scalar features
                 # has shape (n_nodes, n_pharmvec_channels, n_pharmvec_channels, 3)
-                dij = v_t[ntype].unsqueeze(2) - dst_dict[m.name].unsqueeze(1) 
+                dij = dst_dict[m.name].unsqueeze(1) - v_t[ntype].unsqueeze(2)
                 dij = _norm_no_nan(dij) # has shape (n_nodes, n_pharmvec_channels, n_pharmvec_channels)
                 # flatten to shape (n_nodes, n_pharmvec_channels+n_pharmvec_channels)
                 dij = rearrange(dij, 'n c1 c2 -> n (c1 c2)')
                 node_res_input = self.t1_embedding_fns[m.name](dij)
+
+                # also, the last self.n_pharmvec_channels of the vector features are set previously predicted values
+                v_t[ntype][:, -self.n_pharmvec_channels:, :] = dst_dict[m.name]
             elif m.is_categorical:
                 # for categorical features, we just add the final state
                 node_res_input = self.t1_embedding_fns[m.name](dst_dict[m.name])
@@ -129,9 +138,7 @@ class SelfConditioningResidualLayer(nn.Module):
             # sum inputs to the residual fn
             res_inputs = sum(node_residual_inputs[ntype])
             # apply the residual fn
-            node_residual[ntype] = self.node_residual_mlps[ntype](res_inputs)
-
-        node_residual = self.node_residual_mlp(torch.cat(node_residual_inputs, dim=-1))
+            node_residuals[ntype] = self.node_residual_mlps[ntype](res_inputs)
 
         # do edge residual for lig_lig edges (the only edges where we maintain edge features)
         if name_to_modality('lig_x') in task.modalities_generated:
@@ -146,19 +153,21 @@ class SelfConditioningResidualLayer(nn.Module):
                 d_input,  # change in edge length
             ]
             edge_residual = self.lig_edge_residual_mlp(torch.cat(edge_residual_inputs, dim=-1))
-            edge_feats_out = torch.zeros_like(e_t['lig_to_lig'])
-            edge_feats_out[upper_edge_mask['lig_to_lig']] = edge_residual
-            edge_feats_out[~upper_edge_mask['lig_to_lig']] = edge_residual
+            ll_feats = torch.zeros_like(e_t['lig_to_lig'])
+            ll_feats[upper_edge_mask['lig_to_lig']] = edge_residual
+            ll_feats[~upper_edge_mask['lig_to_lig']] = edge_residual
+            e_t['lig_to_lig'] = ll_feats
 
         # apply residual to get output node features
         node_feats_out = {}
-        for ntype in node_residual:
-            node_feats_out[ntype] = s_t[ntype] + node_residual[ntype]
+        for ntype in node_residuals:
+            node_feats_out[ntype] = s_t[ntype] + node_residuals[ntype]
 
         positions_out = x_t
         vectors_out = v_t
+        edge_feats_out = e_t
 
-        return node_feats_out, positions_out, vectors_out, {'lig_to_lig': edge_feats_out}
+        return node_feats_out, positions_out, vectors_out, edge_feats_out
 
     def edge_distances(self, g: dgl.DGLGraph, canonical_etype: tuple, node_positions=None):
         """Precompute the pairwise distances between all nodes in the graph."""

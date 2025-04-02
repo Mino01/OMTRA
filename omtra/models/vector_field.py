@@ -38,8 +38,7 @@ class EndpointVectorField(nn.Module):
         self,
         interpolant_scheduler: InterpolantScheduler,
         td_coupling: TaskDatasetCoupling,
-        n_charges: int = 6,
-        n_bond_types: int = 4,
+        n_pharmvec_channels: int = 4,
         n_vec_channels: int = 16,
         n_cp_feats: int = 0,
         n_hidden_scalars: int = 64,
@@ -96,6 +95,7 @@ class EndpointVectorField(nn.Module):
         self.rbf_dim = rbf_dim
 
         assert n_vec_channels >= 3, "n_vec_channels must be >= 3"
+        assert n_vec_channels >= 2*n_pharmvec_channels, "n_vec_channels must be >= 2*n_pharmvec_channels"
 
         self.continuous_inv_temp_schedule = continuous_inv_temp_schedule
         self.continouts_inv_temp_max = continuous_inv_temp_max
@@ -301,9 +301,7 @@ class EndpointVectorField(nn.Module):
         if self.self_conditioning:
             # raise NotImplementedError("Self conditioning not implemented yet")
             self.self_conditioning_residual_layer = SelfConditioningResidualLayer(
-                n_atom_types=n_atom_types,
-                n_charges=n_charges,
-                n_bond_types=n_bond_types,
+                n_pharmvec_channels=n_pharmvec_channels,
                 node_embedding_dim=n_hidden_scalars,
                 edge_embedding_dim=n_hidden_edge_feats,
                 rbf_dim=rbf_dim,
