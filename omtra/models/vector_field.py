@@ -416,7 +416,7 @@ class VectorField(nn.Module):
             if self.self_conditioning and prev_dst_dict is None:
                 train_self_condition = self.training and (torch.rand(1) > 0.5).item()
 
-                train_self_condition = False
+                train_self_condition = True
                 print('WARNING: self-conditioning always enabled for debugging, delete this line!!')
 
 

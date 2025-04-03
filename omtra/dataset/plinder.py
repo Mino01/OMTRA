@@ -483,8 +483,12 @@ class PlinderDataset(ZarrDataset):
         charge_type_map = {charge: i for i, charge in enumerate(charge_map)}
         encoded_charges = []
         for charge in charges:
+            charge = int(charge.item())
             if charge not in charge_type_map:
+                print(f"charge {charge} type {type(charge)} not in charge map")
                 encoded_charges.append(len(charge_map))
+            else:
+                encoded_charges.append(charge_type_map[charge])
         return torch.Tensor(encoded_charges).long()
     
     def convert_ligand(
