@@ -22,6 +22,7 @@ from omtra.tasks.modalities import (
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype
+from omtra.data.graph.utils import get_batch_info, get_edges_per_batch
 from omtra.data.graph.edge_factory import get_edge_builders
 from omtra.constants import (
     lig_atom_type_map,
@@ -487,6 +488,9 @@ class VectorField(nn.Module):
             return dst_dict
         
     def build_edges(self, g: dgl.DGLGraph, node_batch_idx: Dict[str, torch.Tensor], graph_config):
+        batch_num_nodes, batch_num_edges = get_batch_info(g)
+        batch_size = g.batch_size
+        
         edge_builders = get_edge_builders(graph_config)
         prebuilt_edges = ["lig_to_lig", "pharm_to_pharm", "npnde_to_npnde"]
         
@@ -505,6 +509,12 @@ class VectorField(nn.Module):
             
             edge_idxs = builder_fn(src_pos, dst_pos, node_batch_idx[src_ntype], node_batch_idx[dst_ntype])
             g.add_edges(edge_idxs[0], edge_idxs[1], etype=etype)
+            canonical_etype = (src_ntype, etype, dst_ntype)
+            batch_num_edges[canonical_etype] = get_edges_per_batch(edge_idxs[0], batch_size, node_batch_idx[src_ntype])
+            
+        g.set_batch_num_edges(batch_num_edges)
+        g.set_batch_num_nodes(batch_num_nodes)
+        
         return g
             
         

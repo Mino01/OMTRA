@@ -42,3 +42,22 @@ def get_batch_idxs(g: dgl.DGLHeteroGraph) -> Tuple[dict, dict]:
     node_batch_idx = get_node_batch_idxs(g)
     edge_batch_idx = get_edge_batch_idxs(g)
     return node_batch_idx, edge_batch_idx
+
+def get_batch_info(g: dgl.DGLHeteroGraph) -> Tuple[dict,dict]:
+    batch_num_nodes = {}
+    for ntype in g.ntypes:
+        batch_num_nodes[ntype] = g.batch_num_nodes(ntype)
+
+    batch_num_edges = {}
+    for etype in g.etypes:
+        batch_num_edges[etype] = g.batch_num_edges(etype)
+
+    return batch_num_nodes, batch_num_edges
+
+def get_edges_per_batch(edge_node_idxs: torch.Tensor, batch_size: int, node_batch_idxs: torch.Tensor):
+    device = edge_node_idxs.device
+    batch_idxs = torch.arange(batch_size, device=device)
+    batches_with_edges, edges_per_batch = torch.unique_consecutive(node_batch_idxs[edge_node_idxs], return_counts=True)
+    edges_per_batch_full = torch.zeros_like(batch_idxs)
+    edges_per_batch_full[batches_with_edges] = edges_per_batch
+    return edges_per_batch_full
