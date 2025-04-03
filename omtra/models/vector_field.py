@@ -33,7 +33,7 @@ from omtra.constants import (
 # TODO: have we handled pharm vec features appropriately?
 # TODO: do we initialize pharm vec features?
 # TODO: we don't create node output heads for pharm vec features
-class EndpointVectorField(nn.Module):
+class VectorField(nn.Module):
     def __init__(
         self,
         interpolant_scheduler: InterpolantScheduler,
@@ -54,8 +54,6 @@ class EndpointVectorField(nn.Module):
         update_edge_w_distance: bool = False,
         rbf_dmax=20,
         rbf_dim=16,
-        continuous_inv_temp_schedule=None,
-        continuous_inv_temp_max: float = 10.0,
         time_embedding_dim: int = 64,
         token_dim: int = 64,
         attention: bool = False,
@@ -96,12 +94,6 @@ class EndpointVectorField(nn.Module):
 
         assert n_vec_channels >= 3, "n_vec_channels must be >= 3"
         assert n_vec_channels >= 2*n_pharmvec_channels, "n_vec_channels must be >= 2*n_pharmvec_channels"
-
-        self.continuous_inv_temp_schedule = continuous_inv_temp_schedule
-        self.continouts_inv_temp_max = continuous_inv_temp_max
-        self.continuous_inv_temp_func = self.build_continuous_inv_temp_func(
-            self.continuous_inv_temp_schedule, self.continouts_inv_temp_max
-        )
 
         self.node_types = set()
         self.edge_types = set()
@@ -301,6 +293,7 @@ class EndpointVectorField(nn.Module):
         if self.self_conditioning:
             # raise NotImplementedError("Self conditioning not implemented yet")
             self.self_conditioning_residual_layer = SelfConditioningResidualLayer(
+                td_coupling=td_coupling,
                 n_pharmvec_channels=n_pharmvec_channels,
                 node_embedding_dim=n_hidden_scalars,
                 edge_embedding_dim=n_hidden_edge_feats,
@@ -413,6 +406,11 @@ class EndpointVectorField(nn.Module):
 
             if self.self_conditioning and prev_dst_dict is None:
                 train_self_condition = self.training and (torch.rand(1) > 0.5).item()
+
+                train_self_condition = True
+                print('WARNING: self-conditioning always enabled for debugging, delete this line!!')
+
+
                 inference_first_step = not self.training and (t == 0).all().item()
 
                 # TODO: actually at the first inference step we can just not apply self conditioning, need to test performance effect

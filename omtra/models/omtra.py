@@ -17,7 +17,7 @@ from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
 from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
 from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
-from omtra.models.vector_field import EndpointVectorField
+from omtra.models.vector_field import VectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omegaconf import DictConfig
 
@@ -31,6 +31,7 @@ class OMTRA(pl.LightningModule):
         graph_config: DictConfig,
         conditional_paths: DictConfig,
         total_loss_weights: Dict[str, float] = {},
+        vector_field: DictConfig = None,
     ):
         super().__init__()
 
@@ -79,10 +80,11 @@ class OMTRA(pl.LightningModule):
         }
         self.time_scaled_loss = False
         self.interpolant_scheduler = InterpolantScheduler(schedule_type="linear")
-        self.vector_field = EndpointVectorField(
+        self.vector_field =  VectorField(
             td_coupling=self.td_coupling,
-            interpolant_scheduler=self.interpolant_scheduler
-        )  # TODO: initialize this properly
+            interpolant_scheduler=self.interpolant_scheduler,
+            **vector_field,
+        )
 
 
         self.configure_loss_fns()
