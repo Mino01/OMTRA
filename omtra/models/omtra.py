@@ -83,6 +83,7 @@ class OMTRA(pl.LightningModule):
         self.vector_field =  VectorField(
             td_coupling=self.td_coupling,
             interpolant_scheduler=self.interpolant_scheduler,
+            graph_config=self.graph_config,
             **vector_field,
         )
 
@@ -136,8 +137,8 @@ class OMTRA(pl.LightningModule):
         losses = self(g, task_name)
 
         train_log_dict = {}
-        for key in losses:
-            train_log_dict[f"{key}_train_loss"] = losses[key]
+        for key, loss in losses.items():
+            train_log_dict[f"{key}_train_loss"] = loss
 
         total_loss = torch.zeros(1, device=g.device, requires_grad=True)
         # TODO: loss weighting scheme?
@@ -212,6 +213,8 @@ class OMTRA(pl.LightningModule):
             else:
                 weight = 1.0
             target = targets[modality.name]
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                continue
             losses[modality.name] = (
                 self.loss_fn_dict[modality.name](vf_output[modality.name], target)
                 * weight

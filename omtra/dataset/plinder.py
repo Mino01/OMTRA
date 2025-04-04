@@ -476,13 +476,6 @@ class PlinderDataset(ZarrDataset):
             "pocket_mask": backbone_pocket_mask,
         }
 
-        # NOTE: change later?
-        edge_idxs["prot_atom_to_prot_atom"] = edge_builders.radius_graph(
-            prot_coords, 
-            radius=4.5, 
-            max_num_neighbors=1000
-        )
-
         return node_data, edge_idxs, edge_data
     
     def encode_charges(self, charges: torch.Tensor) -> torch.Tensor:
@@ -490,8 +483,12 @@ class PlinderDataset(ZarrDataset):
         charge_type_map = {charge: i for i, charge in enumerate(charge_map)}
         encoded_charges = []
         for charge in charges:
+            charge = int(charge.item())
             if charge not in charge_type_map:
+                print(f"charge {charge} type {type(charge)} not in charge map")
                 encoded_charges.append(len(charge_map))
+            else:
+                encoded_charges.append(charge_type_map[charge])
         return torch.Tensor(encoded_charges).long()
     
     def convert_ligand(
@@ -603,60 +600,20 @@ class PlinderDataset(ZarrDataset):
                 prot_atom_to_lig_tensor = torch.tensor(
                     prot_atom_to_lig_idxs, dtype=torch.long
                 ).t()
-                edge_idxs["prot_atom_to_lig"] = prot_atom_to_lig_tensor
-                # TODO: covalent edge feature
-                edge_data["prot_atom_to_lig"] = {
-                    "e_1_true": torch.ones(
-                        (prot_atom_to_lig_tensor.shape[1], 1), dtype=torch.long
-                    )
-                }
+                edge_idxs["prot_atom_covalent_lig"] = prot_atom_to_lig_tensor
+                lig_to_prot_atom_tensor = prot_atom_to_lig_tensor[[1, 0]]
+                edge_idxs["lig_covalent_prot_atom"] = lig_to_prot_atom_tensor
 
             if prot_res_to_lig_idxs:
                 prot_res_to_lig_tensor = torch.tensor(
                     prot_res_to_lig_idxs, dtype=torch.long
                 ).t()
-                edge_idxs["prot_res_to_lig"] = prot_res_to_lig_tensor
-                # TODO: covalent edge feature
-                edge_data["prot_res_to_lig"] = {
-                    "e_1_true": torch.ones(
-                        (prot_res_to_lig_tensor.shape[1], 1), dtype=torch.long
-                    )
-                }
+                edge_idxs["prot_res_covalent_lig"] = prot_res_to_lig_tensor
+                lig_to_prot_res_tensor = prot_res_to_lig_tensor[[1, 0]]
+                edge_idxs["lig_covalent_prot_res"] = lig_to_prot_res_tensor
 
         return node_data, edge_idxs, edge_data
-    
-    def connect_ligand_to_pocket(
-        self,
-        node_data: Dict[str, Dict[str, torch.Tensor]],
-        edge_idxs: Dict[str, torch.Tensor],
-        edge_data: Dict[str, Dict[str, torch.Tensor]],
-    ) -> Tuple[
-        Dict[str, Dict[str, torch.Tensor]],
-        Dict[str, torch.Tensor],
-        Dict[str, Dict[str, torch.Tensor]],
-    ]:
-        prot_node_data = node_data['prot_atom']
-        lig_node_data = node_data["lig"]
 
-        pocket_mask = prot_node_data["pocket_mask"]
-        pocket_atom_indices = torch.nonzero(pocket_mask, as_tuple=True)[0]
-        
-        num_lig_atoms = lig_node_data["x_1_true"].shape[0]
-        
-        prot_to_lig_edges = []
-        
-        for lig_idx in range(num_lig_atoms):
-            for prot_idx in pocket_atom_indices:
-                prot_to_lig_edges.append((prot_idx.item(), lig_idx))
-        
-        if prot_to_lig_edges:
-            prot_to_lig_tensor = torch.tensor(prot_to_lig_edges, dtype=torch.long).t()
-            edge_idxs["prot_atom_to_lig"] = prot_to_lig_tensor
-            edge_data["prot_atom_to_lig"] = {
-                "e_1_true": torch.zeros((prot_to_lig_tensor.shape[1], 1), dtype=torch.long)
-            }
-        
-        return node_data, edge_idxs, edge_data
 
     def convert_npndes(
         self,
@@ -670,9 +627,11 @@ class PlinderDataset(ZarrDataset):
         node_data, edge_data, edge_idxs = {}, {}, {}
         node_data["npnde"] = {"x_1_true": torch.empty(0), "a_1_true": torch.empty(0), "c_1_true": torch.empty(0)}
         edge_data["npnde_to_npnde"] = {"e_1_true": torch.empty(0)}
-        edge_data["prot_atom_to_npnde"] = {"e_1_true": torch.empty(0)}
         edge_idxs["npnde_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
-        edge_idxs["prot_atom_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["prot_atom_covalent_npnde"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["npnde_covalent_prot_atom"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["prot_res_covalent_npnde"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["npnde_covalent_prot_res"] = torch.empty((2, 0), dtype=torch.long)
 
         if not npndes:
             return node_data, edge_idxs, edge_data
@@ -800,7 +759,7 @@ class PlinderDataset(ZarrDataset):
             combined_bond_types = torch.cat(all_bond_types, dim=0)
             combined_bond_indices = torch.cat(all_bond_indices, dim=1)
 
-            npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = sparse_to_dense(
+            npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = sparse_to_dense( # NOTE: this full connects npndes, consider k-hop 
                 combined_coords,
                 combined_atom_types,
                 combined_atom_charges,
@@ -826,25 +785,17 @@ class PlinderDataset(ZarrDataset):
             prot_atom_to_npnde_tensor = torch.tensor(
                 all_prot_atom_to_npnde_idxs, dtype=torch.long
             ).t()
-            edge_idxs["prot_atom_to_npnde"] = prot_atom_to_npnde_tensor
-            # TODO: covalent edge feature
-            edge_data["prot_atom_to_npnde"] = {
-                "e_1_true": torch.ones(
-                    (prot_atom_to_npnde_tensor.shape[1], 1), dtype=torch.long
-                )
-            }
+            edge_idxs["prot_atom_covalent_npnde"] = prot_atom_to_npnde_tensor
+            npnde_to_prot_atom_tensor = prot_atom_to_npnde_tensor[[1, 0]]
+            edge_idxs["npnde_covalent_prot_atom"] = npnde_to_prot_atom_tensor
 
         if all_prot_res_to_npnde_idxs:
             prot_res_to_npnde_tensor = torch.tensor(
                 all_prot_res_to_npnde_idxs, dtype=torch.long
             ).t()
-            edge_idxs["prot_res_to_npnde"] = prot_res_to_npnde_tensor
-            # TODO: covalent edge feature
-            edge_data["prot_res_to_npnde"] = {
-                "e_1_true": torch.ones(
-                    (prot_res_to_npnde_tensor.shape[1], 1), dtype=torch.long
-                )
-            }
+            edge_idxs["prot_res_covalent_npnde"] = prot_res_to_npnde_tensor
+            npnde_to_prot_res_tensor = prot_res_to_npnde_tensor[[1, 0]]
+            edge_idxs["npnde_covalent_prot_res"] = npnde_to_prot_res_tensor
 
         return node_data, edge_idxs, edge_data
 
@@ -917,8 +868,6 @@ class PlinderDataset(ZarrDataset):
             node_data.update(pharm_node_data)
             edge_idxs.update(pharm_edge_idxs)
             edge_data.update(pharm_edge_data)
-        
-        node_data, edge_idxs, edge_data = self.connect_ligand_to_pocket(node_data, edge_idxs, edge_data)
 
         return node_data, edge_idxs, edge_data
 

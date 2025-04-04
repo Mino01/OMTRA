@@ -96,6 +96,8 @@ class SelfConditioningResidualLayer(nn.Module):
             if not m.is_node:
                 continue
             ntype = m.entity_name
+            if g.num_nodes(ntype) == 0:
+                continue
             m_generated = m.name in dst_dict
             if m.data_key == 'x':
                 # for positions, the distance to the final position and the initial position
