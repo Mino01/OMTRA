@@ -980,7 +980,7 @@ class PlinderDataset(ZarrDataset):
             elif ntype == "prot_atom":
                 counts = np.array(
                     [
-                        row["rec_end"] - row["rec_start"]
+                        row["pocket_end"] - row["pocket_start"]
                         for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
                             "records"
                         )
@@ -989,7 +989,7 @@ class PlinderDataset(ZarrDataset):
             elif ntype == "prot_res":
                 counts = np.array(
                     [
-                        row["backbone_end"] - row["backbone_start"]
+                        row["pocket_bb_end"] - row["pocket_bb_start"]
                         for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
                             "records"
                         )
