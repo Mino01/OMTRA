@@ -45,6 +45,7 @@ class PharmitDataset(ZarrDataset):
     
     @property
     def n_zarr_chunks(self):
+        raise NotImplementedError("this line relies on the hard-coded assumption that graph lookup table is 1 chunk - don't think this is true anymore")
         graph_lookup = self.root['lig/node/graph_lookup']
         return graph_lookup.chunks[0]
     

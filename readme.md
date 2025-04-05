@@ -22,3 +22,5 @@ chmod +x build_env.sh
 - [ ] CCD code frequency weighting in plinder dataset
 - [ ] sampling code
 - [ ] sampled system object, ligand builder object
+- [ ] configure optimizers
+- [ ] test gpu usage vs. batch size

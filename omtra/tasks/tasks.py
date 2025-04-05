@@ -185,19 +185,11 @@ class ExpApoConditionedLigandDocking(Task):
     priors['prot_atom_x'] = {
         'type': 'apo_exp',
     }
-    priors['npnde_x'] = { 
-        'type': 'fixed'
-    }
-    priors['prot_atom_npnde_e'] = {
-        'type': 'fixed'
-    }
-    priors['prot_atom_lig_e'] = {
-        'type': 'masked'
+    priors['npnde_x'] = {
+        'type': 'gaussian',
+        'params': {'ot': True}
     }
     conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-    conditional_paths["prot_atom_lig_e"] = {
-        'type': 'ctmc_mask'
-    }
 
 @register_task("predapo_conditioned_ligand_docking")
 class PredApoConditionedLigandDocking(Task):
@@ -210,18 +202,10 @@ class PredApoConditionedLigandDocking(Task):
         'type': 'apo_pred',
     }
     priors['npnde_x'] = {
-        'type': 'fixed'
-    }
-    priors['prot_atom_npnde_e'] = {
-        'type': 'fixed'
-    }
-    priors['prot_atom_lig_e'] = {
-        'type': 'masked'
+        'type': 'gaussian',
+        'params': {'ot': True}
     }
     conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
-    conditional_paths["prot_atom_lig_e"] = {
-        'type': 'ctmc_mask'
-    }
 
 
 ##
@@ -235,6 +219,10 @@ class ProteinLigandPharmacophoreDeNovo(Task):
     priors = dict(**pc.denovo_ligand, **pc.denovo_pharmacophore)
     priors['prot_atom_x'] = {
         'type': 'target_dependent_gaussian',
+    }
+    priors['npnde_x'] = {
+        'type': 'gaussian',
+        'params': {'ot': True}
     }
 
 

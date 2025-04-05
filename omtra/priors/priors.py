@@ -85,3 +85,14 @@ def pred_prior(x0: torch.Tensor):
     return x0.clone()
 
 
+@register_train_prior("target_dependent_gaussian")
+@register_inference_prior("target_dependent_gaussian")
+def target_dependent_gaussian_prior(x1: torch.Tensor, std: float = 1.0):
+    """
+    Generate a target-dependent Gaussian prior feature.
+    """
+    x_0 = x1.clone() + torch.randn_like(x1) * std
+    # TODO: adjust COM of x_0??
+    return x_0
+
+

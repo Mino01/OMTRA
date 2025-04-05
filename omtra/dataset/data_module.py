@@ -68,10 +68,12 @@ class MultiTaskDataModule(pl.LightningDataModule):
                              **self.dataset_config)
     
     def train_dataloader(self):
+        
         dataloader = DataLoader(self.train_dataset, 
                                 batch_sampler=self.train_sampler,
                                 collate_fn=omtra_collate_fn, 
                                 worker_init_fn=worker_init_fn,
+                                persistent_workers=self.num_workers > 0,
                                 num_workers=self.num_workers)
 
         return dataloader
@@ -82,6 +84,7 @@ class MultiTaskDataModule(pl.LightningDataModule):
                                 batch_sampler=self.val_sampler,
                                 collate_fn=omtra_collate_fn, 
                                 worker_init_fn=worker_init_fn,
+                                persistent_workers=self.num_workers > 0,
                                 num_workers=self.num_workers)
         return dataloader
     

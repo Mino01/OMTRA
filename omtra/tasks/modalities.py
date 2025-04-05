@@ -35,7 +35,7 @@ class Modality:
     def is_categorical(self) -> bool:
         """Checks if the modality is categorical."""
         # TODO: whats going on with n_categories == 0? why we doing that?
-        return self.n_categories is not None and self.n_categories > 0
+        return self.n_categories is not None
     
     @property
     def is_node(self) -> bool:

@@ -11,6 +11,7 @@ from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.models.self_conditioning import SelfConditioningResidualLayer
 from omtra.tasks.tasks import Task
+from omtra.tasks.utils import get_edges_for_task
 from omtra.tasks.register import task_name_to_class
 from omtra.load.conf import TaskDatasetCoupling
 from omtra.tasks.modalities import (
@@ -22,6 +23,7 @@ from omtra.tasks.modalities import (
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype
+from omtra.data.graph import edge_types as all_edge_types
 from omtra.data.graph.utils import get_batch_info, get_edges_per_batch
 from omtra.data.graph.edge_factory import get_edge_builders
 from omtra.constants import (
@@ -142,12 +144,16 @@ class VectorField(nn.Module):
         for modality in modalities_present_cls:
             if modality.graph_entity != "edge":
                 continue
-            if modality.n_categories is None:
+            if not modality.is_categorical:
                 raise ValueError("did not expect continuous edge features")
             self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
             self.edge_types.add(modality.entity_name)
+        
+        # get all edge types that we need to support
+        self.edge_types = set()
+        for task in task_classes:
+            self.edge_types.update(get_edges_for_task(task, graph_config))
             
-        self.edge_types.update(graph_config.get("edges").keys())
         # create a task embedding
         self.task_embedding = nn.Embedding(len(td_coupling.task_space), self.task_embedding_dim)
 
@@ -167,12 +173,13 @@ class VectorField(nn.Module):
         # for each edge type that has edge features, create a function for initial edge embeddings
         self.edge_embedding = nn.ModuleDict()
         for etype in self.edge_types:
-            if self.edge_feat_sizes[etype] > 0:
-                self.edge_embedding[etype] = nn.Sequential(
-                    nn.Linear(token_dim, n_hidden_edge_feats),
-                    nn.SiLU(),
-                    nn.LayerNorm(n_hidden_edge_feats),
-                )
+            if self.edge_feat_sizes[etype] == 0:
+                continue
+            self.edge_embedding[etype] = nn.Sequential(
+                nn.Linear(token_dim, n_hidden_edge_feats),
+                nn.SiLU(),
+                nn.LayerNorm(n_hidden_edge_feats),
+            )
 
         # TODO: node_types and edge_types used to be like, all the possible node and edge types on which we defined modalities
         # now they are just node types and edge types that are being supported by this model??? i think?? somehow
@@ -415,11 +422,6 @@ class VectorField(nn.Module):
 
             if self.self_conditioning and prev_dst_dict is None:
                 train_self_condition = self.training and (torch.rand(1) > 0.5).item()
-
-                train_self_condition = True
-                print('WARNING: self-conditioning always enabled for debugging, delete this line!!')
-
-
                 inference_first_step = not self.training and (t == 0).all().item()
 
                 # TODO: actually at the first inference step we can just not apply self conditioning, need to test performance effect
@@ -500,6 +502,9 @@ class VectorField(nn.Module):
             src_ntype, _, dst_ntype = to_canonical_etype(etype)
             
             if src_ntype not in self.node_types or dst_ntype not in self.node_types:
+                continue
+
+            if g.num_nodes(src_ntype) == 0 or g.num_nodes(dst_ntype) == 0:
                 continue
             
             src_pos, dst_pos = g.nodes[src_ntype].data["x_t"], g.nodes[dst_ntype].data["x_t"]

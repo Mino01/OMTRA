@@ -98,9 +98,11 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
     src_n, dst_n = num_nodes_dict[src_ntype], num_nodes_dict[dst_ntype]
     graph_type = graph_config.edges[etype]['type']
     if graph_type == 'complete':
-         n_edges = src_n * dst_n
+        if src_ntype != dst_ntype:
+            raise ValueError(f"Complete graph type only supported on edges between two nodes of the same type, but got {src_ntype} and {dst_ntype}.")
+        n_edges = src_n * (src_n - 1)
     elif graph_type == 'knn':
-        k = graph_config.edges[etype]['k']
+        k = graph_config.edges[etype].params.k
         n_edges = src_n * k
     elif graph_type == 'radius':
         raise NotImplementedError('have not come up with an approximate number of edges for radius graph')

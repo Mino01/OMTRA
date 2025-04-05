@@ -114,6 +114,7 @@ class OMTRA(pl.LightningModule):
 
 
     def training_step(self, batch_data, batch_idx):
+        # print('forward pass!')
         g, task_name, dataset_name = batch_data
 
         # get the total batch size across all devices
@@ -145,8 +146,16 @@ class OMTRA(pl.LightningModule):
         for loss_name, loss_val in losses.items():
             total_loss = total_loss + 1.0 * loss_val
 
-        train_log_dict["train_total_loss"] = total_loss
+        # train_log_dict["train_total_loss"] = total_loss
         self.log_dict(train_log_dict, sync_dist=True)
+        self.log(
+            "train_total_loss",
+            total_loss,
+            prog_bar=True,
+            sync_dist=True,
+            on_step=True,
+        )
+        print(f'forward pass complete! batch_size={batch_data[0].batch_size}', flush=True)
         return total_loss
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):

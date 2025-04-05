@@ -45,7 +45,7 @@ class SelfConditioningResidualLayer(nn.Module):
 
         self.node_generated_dims = defaultdict(int)
         # handle node modalities
-        for modality in modalities_generated:
+        for modality in modalities_present:
             if not modality.is_node:
                 continue
             ntype = modality.entity_name
@@ -160,7 +160,7 @@ class SelfConditioningResidualLayer(nn.Module):
             if 'lig_e' in dst_dict:
                 last_pred_state = dst_dict["lig_e"]
             else:
-                last_pred_state = g.edges['lig_to_lig'].data['e_t'][upper_edge_mask['lig_to_lig']]
+                last_pred_state = tfn.one_hot(g.edges['lig_to_lig'].data['e_t'][upper_edge_mask['lig_to_lig']], name_to_modality('lig_e').n_categories)
 
             edge_residual_inputs = [
                 e_t['lig_to_lig'][upper_edge_mask['lig_to_lig']],  # current state of the edge

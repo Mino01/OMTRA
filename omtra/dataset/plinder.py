@@ -18,6 +18,7 @@ from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.data.xace_ligand import sparse_to_dense
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
+from omtra.tasks.utils import get_edges_for_task
 from omtra.utils.misc import classproperty
 from omtra.priors.prior_factory import get_prior
 from omtra.tasks.modalities import name_to_modality
@@ -34,13 +35,13 @@ import numpy as np
 import functools
 
 
+
 class PlinderDataset(ZarrDataset):
     def __init__(
         self,
         link_version: str,
         split: str,
         processed_data_dir: str,
-        graphs_per_chunk: int = 1,
         graph_config: Optional[DictConfig] = None,
         prior_config: Optional[DictConfig] = None,
         include_pharmacophore: bool = False,
@@ -52,7 +53,6 @@ class PlinderDataset(ZarrDataset):
             else f"{processed_data_dir}/no_links",
         )
         self.link_version = link_version
-        self.graphs_per_chunk = graphs_per_chunk
         self.graph_config = graph_config
         self.prior_config = prior_config
 
@@ -69,6 +69,18 @@ class PlinderDataset(ZarrDataset):
     @classproperty
     def name(cls):
         return "plinder"
+    
+    @property
+    def n_zarr_chunks(self):
+        coords_arr = self.root["pocket/coords"]
+        n_atoms = coords_arr.shape[0]
+        n_chunks = n_atoms // coords_arr.chunks[0]
+        return n_chunks
+    
+    @property
+    def graphs_per_chunk(self):
+        return len(self) // self.n_zarr_chunks
+
 
     def __len__(self):
         return self.system_lookup.shape[0]
@@ -98,7 +110,7 @@ class PlinderDataset(ZarrDataset):
                 is_covalent = True
 
             npndes[key] = LigandData(
-                sdf=npnde_info["lig_sdf"],
+                sdf=npnde_info["sdf"],
                 ccd=npnde_info["ccd"],
                 is_covalent=is_covalent,
                 linkages=npnde_info["linkages"],
@@ -649,16 +661,19 @@ class PlinderDataset(ZarrDataset):
             all_atom_types.append(atom_types)
             all_atom_charges.append(atom_charges)
 
-            if (
-                ligand_data.bond_types is not None
-                and ligand_data.bond_indices is not None
-            ):
+            # check if the npnde has bonds
+            has_bonds = ligand_data.bond_types is not None and ligand_data.bond_indices is not None
+            if has_bonds and ligand_data.bond_types.shape[0] == 0:
+                has_bonds = False
+
+            if has_bonds:
                 bond_types = torch.from_numpy(ligand_data.bond_types).long()
                 bond_indices = torch.from_numpy(ligand_data.bond_indices).long()
 
                 adjusted_indices = bond_indices.clone()
                 adjusted_indices[0, :] += node_offset
                 adjusted_indices[1, :] += node_offset
+
 
                 all_bond_types.append(bond_types)
                 all_bond_indices.append(adjusted_indices)
@@ -746,8 +761,9 @@ class PlinderDataset(ZarrDataset):
 
         if all_bond_types and all_bond_indices:
             combined_bond_types = torch.cat(all_bond_types, dim=0)
-            combined_bond_indices = torch.cat(all_bond_indices, dim=1)
+            combined_bond_indices = torch.cat(all_bond_indices, dim=0)
 
+            print("WARNING: npnde fully connected, don't do this please!")
             npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = (
                 sparse_to_dense(  # NOTE: this fully connects npndes, consider k-hop
                     combined_coords,
@@ -908,9 +924,14 @@ class PlinderDataset(ZarrDataset):
                         "system.link is None, cannot retrieve link coordinates."
                     )
             else:
-                target_data = g_data_loc[modality.entity_name].data[
-                    f"{modality.data_key}_1_true"
-                ]
+                try:
+                    target_data = g_data_loc[modality.entity_name].data[
+                        f"{modality.data_key}_1_true"
+                    ]
+                except Exception as e:
+                    print('breakpoint!')
+                    raise e
+                
 
             # if the prior is masked, we need to pass the number of categories for this modality to the prior function
             if prior_name == "masked":
@@ -1019,7 +1040,7 @@ class PlinderDataset(ZarrDataset):
                     ]
                 )
 
-        node_counts.append(counts)
+            node_counts.append(counts)
 
         if per_ntype:
             num_nodes_dict = {
@@ -1040,6 +1061,9 @@ class PlinderDataset(ZarrDataset):
         n_nodes_dict = self.get_num_nodes(task, start_idx, end_idx, per_ntype=True)
         node_types, n_nodes_per_type = zip(*n_nodes_dict.items())
 
+        # get edge types modeled under this task
+        edge_types = get_edges_for_task(task, self.graph_config)
+        
         # evaluate same-ntype edges
         n_edges_total = torch.zeros(end_idx - start_idx, dtype=torch.int64)
         for ntype, n_nodes in zip(node_types, n_nodes_per_type):
@@ -1047,13 +1071,14 @@ class PlinderDataset(ZarrDataset):
             n_edges = approx_n_edges(etype, self.graph_config, n_nodes_dict)
             n_edges_total += n_edges
 
-        # cover cross-ntype edges
-        # there are many problems in how we do this; the user needs to specify configs
-        # exactly right or we could end up miscounting edges here, so...tbd
-        # TODO: lig_to_pharm symmetry may be less desireable than pharm_to_lig symmetry
-        if len(node_types) == 2:
-            assert "lig_to_pharm" in self.graph_config.symmetric_etypes
-            n_edges = approx_n_edges("lig_to_pharm", self.graph_config, n_nodes_dict)
-            n_edges_total += n_edges * 2
+        for etype in edge_types:
+
+            # no need to count covalent edges, they're rare and few
+            if 'covalent' in etype:
+                continue
+            n_edges = approx_n_edges(etype, self.graph_config, n_nodes_dict)
+            if etype in self.graph_config.symmetric_etypes:
+                n_edges *= 2
+            n_edges_total += n_edges
 
         return n_edges_total
