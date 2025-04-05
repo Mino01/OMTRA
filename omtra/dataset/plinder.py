@@ -34,6 +34,14 @@ import pandas as pd
 import numpy as np
 import functools
 
+import warnings
+
+# Suppress the specific warning from vlen_utf8.py
+warnings.filterwarnings(
+    "ignore",
+    message="The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.*",
+    module="zarr.codecs.vlen_utf8"
+)
 
 
 class PlinderDataset(ZarrDataset):
@@ -924,14 +932,10 @@ class PlinderDataset(ZarrDataset):
                         "system.link is None, cannot retrieve link coordinates."
                     )
             else:
-                try:
-                    target_data = g_data_loc[modality.entity_name].data[
-                        f"{modality.data_key}_1_true"
-                    ]
-                except Exception as e:
-                    print('breakpoint!')
-                    raise e
-                
+                target_data = g_data_loc[modality.entity_name].data[
+                    f"{modality.data_key}_1_true"
+                ]
+
 
             # if the prior is masked, we need to pass the number of categories for this modality to the prior function
             if prior_name == "masked":
@@ -1066,11 +1070,6 @@ class PlinderDataset(ZarrDataset):
         
         # evaluate same-ntype edges
         n_edges_total = torch.zeros(end_idx - start_idx, dtype=torch.int64)
-        for ntype, n_nodes in zip(node_types, n_nodes_per_type):
-            etype = f"{ntype}_to_{ntype}"
-            n_edges = approx_n_edges(etype, self.graph_config, n_nodes_dict)
-            n_edges_total += n_edges
-
         for etype in edge_types:
 
             # no need to count covalent edges, they're rare and few

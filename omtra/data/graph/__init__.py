@@ -96,6 +96,11 @@ def build_complex_graph(
 def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[str, int]):
     src_ntype, etype, dst_ntype = to_canonical_etype(etype)
     src_n, dst_n = num_nodes_dict[src_ntype], num_nodes_dict[dst_ntype]
+
+    # TODO: not .. this?
+    if etype == 'npnde_to_npnde':
+        return src_n*1.25
+
     graph_type = graph_config.edges[etype]['type']
     if graph_type == 'complete':
         if src_ntype != dst_ntype:
@@ -105,7 +110,9 @@ def approx_n_edges(etype: str, graph_config: DictConfig, num_nodes_dict: Dict[st
         k = graph_config.edges[etype].params.k
         n_edges = src_n * k
     elif graph_type == 'radius':
-        raise NotImplementedError('have not come up with an approximate number of edges for radius graph')
+        print('radius graph approximation is really bad please fix me!!!!!!!!!')
+        r = graph_config.edges[etype].params.r
+        n_edges = src_n*r*2
     else:
         raise ValueError(f"Graph type {graph_type} not recognized.")
     
