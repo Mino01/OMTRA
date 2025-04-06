@@ -9,6 +9,7 @@ import wandb
 import itertools
 import numpy as np
 from functools import partial
+import time
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask

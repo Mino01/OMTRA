@@ -4,3 +4,6 @@
 # _target_: omtra.models.vector_field.VectorField
 
 self_conditioning: true
+convs_per_update: 4
+n_molecule_updates: 1
+n_hidden_scalars: 256
