@@ -317,6 +317,8 @@ class OMTRA(pl.LightningModule):
         groups_generated = task.groups_generated
         groups_present = task.groups_present
 
+        # TODO: user-supplied n_atoms dict?
+
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
         if set(groups_generated) != set(groups_present) and g is None:
@@ -359,6 +361,20 @@ class OMTRA(pl.LightningModule):
         elif not protein_present and 'pharm' in ntypes_to_add:
             # TODO sample pharm atoms given n_ligand_atoms, can use plinder or pharmit dataset distributions
             pass
+
+        # add pre-determined edges to the graph
+        # let the user set the COM of the system?
+        # if that supplied graph was None, create the graph?
+
+        # TODO: sample prior distributions for every modality being generated
+        # how to consider COMs for sampling ligand and pharmacophore initial positions?
+        # sample both lig and pharm positions with mean = user-supplied COM
+        # COM could default to protein COM or it can be like, the ground truth ligand COM
+
+        # pass graph to vector field..
+
+        # vector field returns DGL graph?
+        # unbatch DGL graphs and convert to SampledSystem object
 
 
         
