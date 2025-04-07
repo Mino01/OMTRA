@@ -9,6 +9,7 @@ import wandb
 import itertools
 import numpy as np
 from functools import partial
+import time
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask
@@ -17,7 +18,7 @@ from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
 from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
 from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
-from omtra.models.vector_field import EndpointVectorField
+from omtra.models.vector_field import VectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omegaconf import DictConfig
 
@@ -30,7 +31,9 @@ class OMTRA(pl.LightningModule):
         dists_file: str,
         graph_config: DictConfig,
         conditional_paths: DictConfig,
+        optimizer: Callable,
         total_loss_weights: Dict[str, float] = {},
+        vector_field: DictConfig = None,
     ):
         super().__init__()
 
@@ -79,13 +82,17 @@ class OMTRA(pl.LightningModule):
         }
         self.time_scaled_loss = False
         self.interpolant_scheduler = InterpolantScheduler(schedule_type="linear")
-        self.vector_field = EndpointVectorField(
+        self.vector_field =  VectorField(
             td_coupling=self.td_coupling,
-            interpolant_scheduler=self.interpolant_scheduler
-        )  # TODO: initialize this properly
+            interpolant_scheduler=self.interpolant_scheduler,
+            graph_config=self.graph_config,
+            **vector_field,
+        )
 
 
         self.configure_loss_fns()
+
+        self.save_hyperparameters()
 
     def configure_loss_fns(self):
 
@@ -134,16 +141,23 @@ class OMTRA(pl.LightningModule):
         losses = self(g, task_name)
 
         train_log_dict = {}
-        for key in losses:
-            train_log_dict[f"{key}_train_loss"] = losses[key]
+        for key, loss in losses.items():
+            train_log_dict[f"{key}_train_loss"] = loss
 
         total_loss = torch.zeros(1, device=g.device, requires_grad=True)
         # TODO: loss weighting scheme?
         for loss_name, loss_val in losses.items():
             total_loss = total_loss + 1.0 * loss_val
 
-        train_log_dict["train_total_loss"] = total_loss
+        # train_log_dict["train_total_loss"] = total_loss
         self.log_dict(train_log_dict, sync_dist=True)
+        self.log(
+            "train_total_loss",
+            total_loss,
+            prog_bar=True,
+            sync_dist=True,
+            on_step=True,
+        )
         return total_loss
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
@@ -210,6 +224,8 @@ class OMTRA(pl.LightningModule):
             else:
                 weight = 1.0
             target = targets[modality.name]
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                continue
             losses[modality.name] = (
                 self.loss_fn_dict[modality.name](vf_output[modality.name], target)
                 * weight
@@ -219,8 +235,8 @@ class OMTRA(pl.LightningModule):
         return losses
 
     def configure_optimizers(self):
-        # implement optimizer
-        pass
+        optimizer = self.hparams.optimizer(self.parameters())
+        return optimizer
 
     def sample_conditional_path(
         self,
@@ -242,6 +258,13 @@ class OMTRA(pl.LightningModule):
         )
         for modality_name in conditonal_path_fns:
             modality: Modality = name_to_modality(modality_name)
+            
+            # skip modalities that are not present in the graph (for example a system with no npndes)
+            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                continue
+            elif not modality.is_node and g.num_edges(modality.entity_name) == 0:
+                continue
+            
             conditional_path_name, conditional_path_fn = conditonal_path_fns[
                 modality_name
             ]
@@ -285,3 +308,74 @@ class OMTRA(pl.LightningModule):
             ].data[f"{dk}_1_true"]
 
         return g
+
+
+    @torch.no_grad()
+    def sample(self, task_name: str, g: dgl.DGLHeteroGraph = None):
+
+        task: Task = task_name_to_class(task_name)
+        groups_generated = task.groups_generated
+        groups_present = task.groups_present
+
+        # TODO: user-supplied n_atoms dict?
+
+        # unless this is a completely and totally unconditional task, the user
+        # has to provide the conditional information in the graph
+        if set(groups_generated) != set(groups_present) and g is None:
+            raise ValueError(
+                f"Task {task_name} requires a user-provided graph to sample from, but none was provided."
+            )
+        
+        # determine if we need to add nodes to the system
+        ntypes_to_add = []
+        if 'ligand_identity' in groups_generated:
+            ntypes_to_add.append('lig')
+        if 'pharmacophore' in groups_generated:
+            ntypes_to_add.append('pharm')
+
+        protein_present = 'protein_structure' in groups_present
+            
+        # TODO: sample number of ligand atoms
+        if protein_present and 'lig' in ntypes_to_add:
+            n_lig_atoms = torch.tensor([10], device=g.device)
+            # if protein is present, sample ligand atoms from p(n_ligand_atoms|n_protein_atoms,n_pharm_atoms)
+            # if pharm atoms not present, we marginalize over n_pharm_atoms - this distribution from plinder dataset
+        elif not protein_present and 'lig' in ntypes_to_add:
+            n_lig_atoms = torch.tensor([10], device=g.device)
+        else:
+            n_lig_atoms = None
+            # TODO: if no protein is present, sample p(n_ligand_atoms|n_pharm_atoms), marginalizing if n_pharm_atoms is not present
+            # in this case, the distrbution could come from pharmit or plinder dataset..user-chosen option?
+
+        # add lig atoms to graph
+        if n_lig_atoms is not None:
+            # add ligand nodes to the graph
+            g.add_nodes(n_lig_atoms, ntype='lig')
+            # TODO: add lig-lig edges
+
+
+
+        if protein_present and 'pharm' in ntypes_to_add:
+            # TODO sample pharm atoms given n_protein_atoms, n_ligand_atoms
+            pass
+        elif not protein_present and 'pharm' in ntypes_to_add:
+            # TODO sample pharm atoms given n_ligand_atoms, can use plinder or pharmit dataset distributions
+            pass
+
+        # add pre-determined edges to the graph
+        # let the user set the COM of the system?
+        # if that supplied graph was None, create the graph?
+
+        # TODO: sample prior distributions for every modality being generated
+        # how to consider COMs for sampling ligand and pharmacophore initial positions?
+        # sample both lig and pharm positions with mean = user-supplied COM
+        # COM could default to protein COM or it can be like, the ground truth ligand COM
+
+        # pass graph to vector field..
+
+        # vector field returns DGL graph?
+        # unbatch DGL graphs and convert to SampledSystem object
+
+
+        
+        

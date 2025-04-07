@@ -13,10 +13,7 @@ def gaussian(x1: torch.Tensor, std: float = 1.0, ot=False):
     """
     Generate a prior feature by sampling from a Gaussian distribution.
     """
-
-    n, d = x1.shape
-
-    x0 = torch.randn(n, d) * std
+    x0 = torch.randn_like(x1) * std
     
     if ot:
         # move x0 to the same COM as x1
@@ -83,5 +80,16 @@ def pred_prior(x0: torch.Tensor):
     Generate a prior from AlphaFold predicted unbound structure
     """
     return x0.clone()
+
+
+@register_train_prior("target_dependent_gaussian")
+@register_inference_prior("target_dependent_gaussian")
+def target_dependent_gaussian_prior(x1: torch.Tensor, std: float = 1.0):
+    """
+    Generate a target-dependent Gaussian prior feature.
+    """
+    x_0 = x1.clone() + torch.randn_like(x1) * std
+    # TODO: adjust COM of x_0??
+    return x_0
 
 
