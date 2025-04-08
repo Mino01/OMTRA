@@ -15,6 +15,7 @@ from omtra.tasks.modalities import name_to_modality
 from omtra.utils.misc import classproperty
 from omtra.data.graph import edge_builders, approx_n_edges
 from omtra.priors.prior_factory import get_prior
+from omtra.priors.sample import sample_priors
 from omtra.constants import lig_atom_type_map, ph_idx_to_type, charge_map
 
 class PharmitDataset(ZarrDataset):
@@ -140,33 +141,8 @@ class PharmitDataset(ZarrDataset):
         # if the prior function is like apo_exp or apo_pred then we have to add some extra logic
         # because we would need to fetch the actual apo structure, so centralized prior sampling logic
         # will look a little different when we support systems with proteins
-        priors_fns = get_prior(task_class, self.prior_config, train=True)
-
-        # sample priors
-        for modality_name in priors_fns:
-            prior_name, prior_func = priors_fns[modality_name] # get prior name and function
-            modality = name_to_modality(modality_name) # get the modality object
-
-            # fetch the target data from the graph object
-            g_data_loc = g.nodes if modality.graph_entity == 'node' else g.edges
-            target_data = g_data_loc[modality.entity_name].data[f'{modality.data_key}_1_true']
-
-            # if the prior is masked, we need to pass the number of categories for this modality to the prior function
-            if prior_name == 'masked':
-                prior_func = functools.partial(prior_func, n_categories=self.n_categories_dict[modality_name])
-
-            # draw a sample from the prior
-            prior_sample = prior_func(target_data)
-
-            # for edge features, make sure upper and lower triangle are the same
-            # TODO: this logic may change if we decide to do something other fully-connected lig-lig edges
-            if modality.graph_entity == 'edge':
-                upper_edge_mask = torch.zeros_like(target_data, dtype=torch.bool)
-                upper_edge_mask[:target_data.shape[0]//2] = 1
-                prior_sample[~upper_edge_mask] = prior_sample[upper_edge_mask]
-
-            # add the prior sample to the graph
-            g_data_loc[modality.entity_name].data[f'{modality.data_key}_0'] = prior_sample
+        priors_fns = get_prior(task_class, self.prior_config, training=True)
+        g = sample_priors(g, task_class, priors_fns)
 
         return g
     

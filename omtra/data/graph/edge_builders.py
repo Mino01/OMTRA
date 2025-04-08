@@ -1,5 +1,6 @@
 import torch_cluster as tc
 from omtra.data.graph.register import register_edge_builder
+import torch
 
 def radius_graph(node_positions, radius, max_num_neighbors=1000):
     edge_idxs = tc.radius_graph(node_positions, 

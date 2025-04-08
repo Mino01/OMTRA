@@ -12,7 +12,8 @@ from functools import partial
 import time
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
-from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask
+from omtra.data.graph import build_complex_graph
+from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask, copy_graph, build_lig_edge_idxs
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
@@ -21,6 +22,9 @@ from omtra.models.conditional_paths.path_factory import get_conditional_path_fns
 from omtra.models.vector_field import VectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omegaconf import DictConfig
+
+from omtra.priors.prior_factory import get_prior
+from omtra.priors.sample import sample_priors
 
 
 class OMTRA(pl.LightningModule):
@@ -311,7 +315,11 @@ class OMTRA(pl.LightningModule):
 
 
     @torch.no_grad()
-    def sample(self, task_name: str, g: dgl.DGLHeteroGraph = None):
+    def sample(self, 
+               task_name: str, 
+               g_list: List[dgl.DGLHeteroGraph] = None, # list of graphs containing conditional information (receptor structure, pharmacphore, ligand identity, etc)
+               n_replicates: int = 1, # number of replicates samples to draw per conditioning input in g_list, or just number of samples if a fully unconditional task
+    ):
 
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -321,53 +329,76 @@ class OMTRA(pl.LightningModule):
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
-        if set(groups_generated) != set(groups_present) and g is None:
+        if set(groups_generated) != set(groups_present) and g_list is None:
             raise ValueError(
-                f"Task {task_name} requires a user-provided graph to sample from, but none was provided."
+                f"Task {task_name} requires a user-provided graphs with conditional information, but none was provided."
             )
         
-        # determine if we need to add nodes to the system
-        ntypes_to_add = []
-        if 'ligand_identity' in groups_generated:
-            ntypes_to_add.append('lig')
-        if 'pharmacophore' in groups_generated:
-            ntypes_to_add.append('pharm')
+        # if this is purely unconditional sampling
+        # we create initial graphs with no data
+        g_flat: List[dgl.DGLHeteroGraph] = []
+        if g_list is None:
+            g_flat = []
+            for _ in range(n_replicates):
+                g_list.append( build_complex_graph(
+                    node_data={},
+                    edge_idxs={},
+                    edge_data={},
+                ))
+        else:
+            # otherwise, we need to copy the graphs out n_replicates times
+            g_flat: List[dgl.DGLHeteroGraph] = []
+            for g_i in g_list:
+                g_flat.extend(copy_graph(g_i, n_replicates))
 
-        protein_present = 'protein_structure' in groups_present
-            
         # TODO: sample number of ligand atoms
-        if protein_present and 'lig' in ntypes_to_add:
-            n_lig_atoms = torch.tensor([10], device=g.device)
+        protein_present = 'protein_structure' in groups_present
+        add_ligand = 'ligand_identity' in groups_generated
+        if protein_present and add_ligand:
+            n_lig_atoms = torch.full((len(g_flat),), 10)
             # if protein is present, sample ligand atoms from p(n_ligand_atoms|n_protein_atoms,n_pharm_atoms)
             # if pharm atoms not present, we marginalize over n_pharm_atoms - this distribution from plinder dataset
-        elif not protein_present and 'lig' in ntypes_to_add:
-            n_lig_atoms = torch.tensor([10], device=g.device)
-        else:
-            n_lig_atoms = None
+        elif not protein_present and add_ligand:
+            n_lig_atoms = torch.full((len(g_flat),), 10)
             # TODO: if no protein is present, sample p(n_ligand_atoms|n_pharm_atoms), marginalizing if n_pharm_atoms is not present
             # in this case, the distrbution could come from pharmit or plinder dataset..user-chosen option?
 
-        # add lig atoms to graph
-        if n_lig_atoms is not None:
-            # add ligand nodes to the graph
-            g.add_nodes(n_lig_atoms, ntype='lig')
-            # TODO: add lig-lig edges
+        
+        if add_ligand:
+            for g_idx, g_i in enumerate(g_flat):
+                # add lig atoms to each graph
+                g_i.add_nodes(n_lig_atoms[g_idx].item(), ntype="lig",)
+
+                # add lig_to_lig edges to each graph
+                edge_idxs = build_lig_edge_idxs(n_lig_atoms[g_idx].item())
+                assert edge_idxs.shape[0] == 2
+                g_i.add_edges(u=edge_idxs[0], v=edge_idxs[1], etype="lig_to_lig")
 
 
-
-        if protein_present and 'pharm' in ntypes_to_add:
+        add_pharm = 'pharmacophore' in groups_generated
+        if protein_present and add_pharm:
             # TODO sample pharm atoms given n_protein_atoms, n_ligand_atoms
-            pass
-        elif not protein_present and 'pharm' in ntypes_to_add:
+            n_pharm_nodes = torch.full((len(g_flat),), 10)
+        elif not protein_present and add_pharm:
             # TODO sample pharm atoms given n_ligand_atoms, can use plinder or pharmit dataset distributions
-            pass
+            n_pharm_nodes = torch.full((len(g_flat),), 10)
+    
+        if add_pharm:
+            for g_idx, g_i in enumerate(g_flat):
+                # add pharm nodes to each graph
+                g_i.add_nodes(n_pharm_nodes[g_idx].item(), ntype="pharm",)
 
-        # add pre-determined edges to the graph
+        # TODO: batch the graphs
+        g = dgl.batch(g_flat)
+
+        # sample prior distributions for each modality
+        prior_fns = get_prior(task, self.prior_config, training=False)
+        g = sample_priors(g, task, prior_fns, training=False)
+
         # let the user set the COM of the system?
         # if that supplied graph was None, create the graph?
 
-        # TODO: sample prior distributions for every modality being generated
-        # how to consider COMs for sampling ligand and pharmacophore initial positions?
+        # TODO: how to consider COMs for sampling ligand and pharmacophore initial positions?
         # sample both lig and pharm positions with mean = user-supplied COM
         # COM could default to protein COM or it can be like, the ground truth ligand COM
 

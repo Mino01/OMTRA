@@ -1,6 +1,6 @@
 import dgl
 import torch
-from typing import Tuple
+from typing import Tuple, List
 
 def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
         """Returns a boolean mask for the edges that lie in the upper triangle of the adjacency matrix for each molecule in the batch."""
@@ -61,3 +61,50 @@ def get_edges_per_batch(edge_node_idxs: torch.Tensor, batch_size: int, node_batc
     edges_per_batch_full = torch.zeros_like(batch_idxs)
     edges_per_batch_full[batches_with_edges] = edges_per_batch
     return edges_per_batch_full
+
+
+def copy_graph(g: dgl.DGLHeteroGraph, n_copies: int) -> List[dgl.DGLHeteroGraph]:
+    """Create n_copies copies of an unbatched DGL heterogeneous graph."""
+    
+    # get edge indicies
+    e_idxs_dict = {}
+    for etype in g.canonical_etypes:
+        e_idxs_dict[etype] = g.edges(form='uv', etype=etype)
+
+    # get number of nodes
+    num_nodes_dict = {}
+    for ntype in g.ntypes:
+        num_nodes_dict[ntype] = g.num_nodes(ntype=ntype)
+
+    # make copies of graph
+    g_copies = [ dgl.heterograph(e_idxs_dict, num_nodes_dict=num_nodes_dict, device=g.device) for _ in range(n_copies) ]
+
+    # transfer over node features
+    for ntype in g.ntypes:
+        for feat_name in g.nodes[ntype].data.keys():
+
+            src_feat = g.nodes[ntype].data[feat_name].detach() # get the feature on the source graph
+
+            # add a clone to each copy
+            for copy_idx in range(n_copies):
+                g_copies[copy_idx].nodes[ntype].data[feat_name] = src_feat.clone()
+
+    # transfer over edge features
+    for etype in g.canonical_etypes:
+        for feat_name in g.edges[etype].data.keys():
+            src_feat = g.edges[etype].data[feat_name].detach()
+            for copy_idx in range(n_copies):
+                g_copies[copy_idx].edges[etype].data[feat_name] = src_feat.clone()
+
+    return g_copies
+
+
+def build_lig_edge_idxs(n_atoms: int) -> torch.Tensor:
+    """Generate edge indicies for lig_to_lig; a fully-connected graph but with upper and lower triangle edges separated."""
+    upper_edge_idxs = torch.triu_indices(n_atoms, n_atoms, offset=1)
+
+    # get lower triangle edges by swapping source and destination of upper_edge_idxs
+    lower_edge_idxs = torch.stack((upper_edge_idxs[1], upper_edge_idxs[0]))
+
+    edges = torch.cat((upper_edge_idxs, lower_edge_idxs), dim=1)
+    return edges

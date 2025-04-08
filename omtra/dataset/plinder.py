@@ -20,6 +20,7 @@ from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
 from omtra.priors.prior_factory import get_prior
+from omtra.priors.sample import sample_priors
 from omtra.tasks.modalities import name_to_modality
 from omtra.data.plinder import (
     LigandData,
@@ -838,15 +839,6 @@ class PlinderDataset(ZarrDataset):
             "i_1_true": interactions,
         }
 
-        # assert self.graph_config.edges["pharm_to_pharm"]["type"] == "complete", (
-        #     "the following code assumes complete pharm-pharm graph"
-        # )
-
-        num_centers = coords.shape[0]
-        if num_centers > 1:
-            pharm_edge_idxs = edge_builders.complete_graph(coords)
-            edge_idxs["pharm_to_pharm"] = pharm_edge_idxs
-
         return node_data, edge_idxs, edge_data
 
     def convert_system(
@@ -910,62 +902,27 @@ class PlinderDataset(ZarrDataset):
             self.convert_system(system, include_pharmacophore=include_pharmacophore)
         )
 
-        # TODO: things!
         g = build_complex_graph(node_data, edge_idxs, edge_data)
 
-        priors_fns = get_prior(task_class, self.prior_config, train=True)
+        # get prior functions
+        prior_fns = get_prior(task_class, self.prior_config, training=True)
 
-        # sample priors
-        for modality_name in priors_fns:
-            prior_name, prior_func = priors_fns[
-                modality_name
-            ]  # get prior name and function
-            modality = name_to_modality(modality_name)  # get the modality object
+        # first, if the task requires a linked structure for the prior,
+        # manually add this to the graph
+        if 'apo' in prior_fns.get("prot_atom_x", ""):
 
-            # skip modalities that are not present in the graph (for example a system with no npndes)
-            if modality.is_node and g.num_nodes(modality.entity_name) == 0:
-                continue
-            elif not modality.is_node and g.num_edges(modality.entity_name) == 0:
-                continue
+            if system.link is None:
+                raise ValueError("system.link is None, cannot retrieve link coordinates.")
 
-            # fetch the target data from the graph object
-            g_data_loc = g.nodes if modality.graph_entity == "node" else g.edges
-
-            if "apo" in prior_name:
-                if system.link is not None:
-                    target_data = self.get_link_coords(
-                        system.link, pocket_mask, bb_pocket_mask, modality_name
-                    )
-                else:
-                    raise ValueError(
-                        "system.link is None, cannot retrieve link coordinates."
-                    )
-            else:
-                target_data = g_data_loc[modality.entity_name].data[
-                    f"{modality.data_key}_1_true"
-                ]
-
-
-            # if the prior is masked, we need to pass the number of categories for this modality to the prior function
-            if prior_name == "masked":
-                prior_func = functools.partial(
-                    prior_func, n_categories=modality.n_categories
-                )
-
-            # draw a sample from the prior
-            prior_sample = prior_func(target_data)
-
-            # for edge features, make sure upper and lower triangle are the same
-            # TODO: this logic may change if we decide to do something other fully-connected lig-lig edges
-            if modality.graph_entity == "edge":
-                upper_edge_mask = torch.zeros_like(target_data, dtype=torch.bool)
-                upper_edge_mask[: target_data.shape[0] // 2] = 1
-                prior_sample[~upper_edge_mask] = prior_sample[upper_edge_mask]
-
-            # add the prior sample to the graph
-            g_data_loc[modality.entity_name].data[f"{modality.data_key}_0"] = (
-                prior_sample
+            g.nodes['prot_atom'].data['x_0'] = self.get_link_coords(
+                system.link, 
+                pocket_mask, 
+                bb_pocket_mask, 
+                'prot_atom_x'
             )
+            
+        # sample priors
+        g = sample_priors(g, self.prior_config, prior_fns, train=True)
 
         return g
 

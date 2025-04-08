@@ -65,7 +65,6 @@ class DeNovoLigand(Task):
     groups_generated = ['ligand_identity', 'ligand_structure']
 
     priors = pc.denovo_ligand
-
     conditional_paths = cpc.denovo_ligand
 
 @register_task("ligand_conformer")

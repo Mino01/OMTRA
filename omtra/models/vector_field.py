@@ -4,28 +4,22 @@ import dgl
 import dgl.function as fn
 from collections import defaultdict
 from typing import Union, Callable, Dict, Optional
-import scipy
 from typing import List
 from omegaconf import DictConfig
 from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.models.self_conditioning import SelfConditioningResidualLayer
 from omtra.tasks.tasks import Task
-from omtra.tasks.utils import get_edges_for_task
+from omtra.tasks.utils import get_edges_for_task, build_edges
 from omtra.tasks.register import task_name_to_class
 from omtra.load.conf import TaskDatasetCoupling
 from omtra.tasks.modalities import (
     Modality,
     name_to_modality,
-    MODALITY_ORDER,
-    DESIGN_SPACE,
 )
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype
-from omtra.data.graph import edge_types as all_edge_types
-from omtra.data.graph.utils import get_batch_info, get_edges_per_batch
-from omtra.data.graph.edge_factory import get_edge_builders
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
@@ -336,7 +330,7 @@ class VectorField(nn.Module):
 
             # the only edges that should be in g at this point are covalent, lig_to_lig, npnde_to_npnde, maybe pharm_to_pharm
             # need to add edges into protein structure, and between differing ntypes (except covalent)
-            g = self.build_edges(g, node_batch_idx, self.graph_config)
+            g = build_edges(g, task_class, node_batch_idx, self.graph_config)
 
             # compose the graph from modalities into the language of the GNN
             # that is node positions, node scalar features, node vector features, and edge features
@@ -488,39 +482,6 @@ class VectorField(nn.Module):
             )
 
             return dst_dict
-        
-    def build_edges(self, g: dgl.DGLGraph, node_batch_idx: Dict[str, torch.Tensor], graph_config):
-        batch_num_nodes, batch_num_edges = get_batch_info(g)
-        batch_size = g.batch_size
-        
-        edge_builders = get_edge_builders(graph_config)
-        prebuilt_edges = ["lig_to_lig", "pharm_to_pharm", "npnde_to_npnde"]
-        
-        for etype in g.etypes:
-            if etype in prebuilt_edges or "covalent" in etype:
-                continue
-            src_ntype, _, dst_ntype = to_canonical_etype(etype)
-            
-            if src_ntype not in self.node_types or dst_ntype not in self.node_types:
-                continue
-
-            if g.num_nodes(src_ntype) == 0 or g.num_nodes(dst_ntype) == 0:
-                continue
-            
-            src_pos, dst_pos = g.nodes[src_ntype].data["x_t"], g.nodes[dst_ntype].data["x_t"]
-            builder_fn = edge_builders.get(etype)
-            if builder_fn is None:
-                raise NotImplementedError(f"Error getting edge builder for {etype}")
-            
-            edge_idxs = builder_fn(src_pos, dst_pos, node_batch_idx[src_ntype], node_batch_idx[dst_ntype])
-            g.add_edges(edge_idxs[0], edge_idxs[1], etype=etype)
-            canonical_etype = (src_ntype, etype, dst_ntype)
-            batch_num_edges[canonical_etype] = get_edges_per_batch(edge_idxs[0], batch_size, node_batch_idx[src_ntype])
-            
-        g.set_batch_num_edges(batch_num_edges)
-        g.set_batch_num_nodes(batch_num_nodes)
-        
-        return g
             
         
 
