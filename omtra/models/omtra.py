@@ -320,6 +320,7 @@ class OMTRA(pl.LightningModule):
                g_list: List[dgl.DGLHeteroGraph] = None, # list of graphs containing conditional information (receptor structure, pharmacphore, ligand identity, etc)
                n_replicates: int = 1, # number of replicates samples to draw per conditioning input in g_list, or just number of samples if a fully unconditional task
                coms: torch.Tensor = None, # center of mass for adding ligands/pharms to systems
+               unconditional_n_atoms_dist: str = 'plinder', # distribution to use for sampling number of atoms in unconditional tasks
     ):
 
         task: Task = task_name_to_class(task_name)
