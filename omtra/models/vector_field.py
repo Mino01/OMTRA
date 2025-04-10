@@ -10,7 +10,7 @@ from omtra.models.gvp import HeteroGVPConv, GVP, _norm_no_nan, _rbf
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.models.self_conditioning import SelfConditioningResidualLayer
 from omtra.tasks.tasks import Task
-from omtra.tasks.utils import get_edges_for_task, build_edges
+from omtra.tasks.utils import get_edges_for_task, build_edges, remove_edges
 from omtra.tasks.register import task_name_to_class
 from omtra.load.conf import TaskDatasetCoupling
 from omtra.tasks.modalities import (
@@ -480,6 +480,9 @@ class VectorField(nn.Module):
                 apply_softmax,
                 remove_com,
             )
+            
+            # TODO: added this here for testing, but not sure if this is the right place
+            g = remove_edges(g)
 
             return dst_dict
             

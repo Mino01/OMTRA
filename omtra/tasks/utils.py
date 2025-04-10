@@ -73,3 +73,29 @@ def build_edges(g: dgl.DGLHeteroGraph,
     g.set_batch_num_nodes(batch_num_nodes)
     
     return g
+
+def remove_edges(g: dgl.DGLHeteroGraph) -> dgl.DGLHeteroGraph:
+    batch_num_nodes, batch_num_edges = get_batch_info(g)
+    batch_size = g.batch_size
+    
+    predetermined_edges = ["lig_to_lig", "npnde_to_npnde"]
+    etypes = g.etypes
+    
+    for etype in etypes:
+        if etype in predetermined_edges or "covalent" in etype:
+            continue
+        
+        if g.num_edges(etype) == 0:
+            continue
+            
+        edges_to_remove = g.edges(etype=etype)
+        g.remove_edges(edges_to_remove, etype=etype)
+        batch_num_edges[etype] = torch.zeros(batch_size, dtype=torch.int64)
+    
+    g.set_batch_num_edges(batch_num_edges)
+    g.set_batch_num_nodes(batch_num_nodes)
+    
+    return g
+    
+    
+    
