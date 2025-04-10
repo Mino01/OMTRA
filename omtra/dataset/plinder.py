@@ -15,7 +15,7 @@ from omtra.constants import (
 )
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders, approx_n_edges
-from omtra.data.xace_ligand import sparse_to_dense
+from omtra.data.xace_ligand import sparse_to_dense, add_k_hop_edges
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
@@ -769,9 +769,8 @@ class PlinderDataset(ZarrDataset):
             combined_bond_types = torch.cat(all_bond_types, dim=0)
             combined_bond_indices = torch.cat(all_bond_indices, dim=0)
 
-            print("WARNING: npnde fully connected, don't do this please!")
             npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = (
-                sparse_to_dense(  # NOTE: this fully connects npndes, consider k-hop
+                add_k_hop_edges(
                     combined_coords,
                     combined_atom_types,
                     combined_atom_charges,
@@ -909,7 +908,8 @@ class PlinderDataset(ZarrDataset):
 
         # first, if the task requires a linked structure for the prior,
         # manually add this to the graph
-        if 'apo' in prior_fns.get("prot_atom_x", ""):
+
+        if 'apo' in prior_fns.get("prot_atom_x", ("", None))[0]:
 
             if system.link is None:
                 raise ValueError("system.link is None, cannot retrieve link coordinates.")
@@ -922,7 +922,7 @@ class PlinderDataset(ZarrDataset):
             )
             
         # sample priors
-        g = sample_priors(g, self.prior_config, prior_fns, train=True)
+        g = sample_priors(g, task_class, prior_fns, training=True)
 
         return g
 

@@ -49,7 +49,7 @@ def get_batch_info(g: dgl.DGLHeteroGraph) -> Tuple[dict,dict]:
         batch_num_nodes[ntype] = g.batch_num_nodes(ntype)
 
     batch_num_edges = {}
-    for etype in g.etypes:
+    for etype in g.canonical_etypes:
         batch_num_edges[etype] = g.batch_num_edges(etype)
 
     return batch_num_nodes, batch_num_edges

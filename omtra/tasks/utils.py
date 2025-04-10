@@ -87,10 +87,13 @@ def remove_edges(g: dgl.DGLHeteroGraph) -> dgl.DGLHeteroGraph:
         
         if g.num_edges(etype) == 0:
             continue
-            
-        edges_to_remove = g.edges(etype=etype)
-        g.remove_edges(edges_to_remove, etype=etype)
-        batch_num_edges[etype] = torch.zeros(batch_size, dtype=torch.int64)
+        src_ntype, _, dst_ntype = to_canonical_etype(etype)
+        canonical_etype = (src_ntype, etype, dst_ntype)
+        
+        # edges_to_remove = g.edges(etype=etype)
+        device = g.device
+        g.remove_edges(torch.arange(g.num_edges(etype), device=device), etype=etype)
+        batch_num_edges[canonical_etype] = torch.zeros(batch_size, dtype=torch.int64, device=device)
     
     g.set_batch_num_edges(batch_num_edges)
     g.set_batch_num_nodes(batch_num_nodes)
