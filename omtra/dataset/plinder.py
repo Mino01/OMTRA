@@ -675,11 +675,10 @@ class PlinderDataset(ZarrDataset):
             if has_bonds:
                 bond_types = torch.from_numpy(ligand_data.bond_types).long()
                 bond_indices = torch.from_numpy(ligand_data.bond_indices).long()
-
+                
                 adjusted_indices = bond_indices.clone()
-                adjusted_indices[0, :] += node_offset
-                adjusted_indices[1, :] += node_offset
-
+                adjusted_indices[:, 0] += node_offset
+                adjusted_indices[:, 1] += node_offset
 
                 all_bond_types.append(bond_types)
                 all_bond_indices.append(adjusted_indices)
