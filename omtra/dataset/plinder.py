@@ -417,10 +417,10 @@ class PlinderDataset(ZarrDataset):
         prot_backbone_mask = torch.from_numpy(holo.backbone_mask).bool()
 
         # TODO: figure out how to store chain ids
-        offset = ord("A")
-        prot_chain_ids = torch.tensor(
-            [ord(chain_id) - offset for chain_id in holo.chain_ids], dtype=torch.long
-        )
+        
+        unique_chains = sorted(set(holo.chain_ids))
+        chain_to_idx = {chain: idx for idx, chain in enumerate(unique_chains)}
+        prot_chain_ids = torch.tensor([chain_to_idx[chain_id] for chain_id in holo.chain_ids], dtype=torch.long)
 
         pocket_res_identifiers = set()
         for i in range(len(pocket.res_ids)):
@@ -452,9 +452,8 @@ class PlinderDataset(ZarrDataset):
         ).long()
 
         # TODO: figure out how to store chain ids
-        offset = ord("A")
         backbone_chain_ids = torch.tensor(
-            [ord(chain_id) - offset for chain_id in holo.backbone.chain_ids],
+            [chain_to_idx[chain_id] for chain_id in holo.backbone.chain_ids],
             dtype=torch.long,
         )
 
@@ -692,6 +691,7 @@ class PlinderDataset(ZarrDataset):
             combined_bond_types = torch.cat(all_bond_types, dim=0)
             combined_bond_indices = torch.cat(all_bond_indices, dim=0)
 
+            k = self.graph_config["edges"]["npnde_to_npnde"]["params"]["k"]
             npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = (
                 add_k_hop_edges(
                     combined_coords,
@@ -699,6 +699,7 @@ class PlinderDataset(ZarrDataset):
                     combined_atom_charges,
                     combined_bond_types,
                     combined_bond_indices,
+                    k=k
                 )
             )
             npnde_c = self.encode_charges(npnde_c)
