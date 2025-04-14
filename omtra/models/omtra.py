@@ -137,20 +137,16 @@ class OMTRA(pl.LightningModule):
 
 
     def training_step(self, batch_data, batch_idx):
-        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
-        print(f"[RANK {rank}] Inside training_step.")
         g, task_name, dataset_name = batch_data
 
-        print(f"[RANK {rank}] task_name: {task_name}, dataset_name: {dataset_name}")
         # get the total batch size across all devices
-        # local_batch_size = torch.tensor([g.batch_size], device=g.device)
-        # all_batch_counts = self.all_gather(local_batch_size)
-        # total_batch_count = all_batch_counts.sum().item()
+        local_batch_size = torch.tensor([g.batch_size], device=g.device)
+        all_batch_counts = self.all_gather(local_batch_size)
+        total_batch_count = all_batch_counts.sum().item()
 
         # log the total sample count
         if self.global_rank == 0:
-            # self.sample_counts[(task_name, dataset_name)] += total_batch_count
-            self.sample_counts[(task_name, dataset_name)] += 1
+            self.sample_counts[(task_name, dataset_name)] += total_batch_count
             metric_name = f"{task_name}_{dataset_name}_sample_count"
             self.log(
                 metric_name,
@@ -162,7 +158,6 @@ class OMTRA(pl.LightningModule):
 
         # forward pass
         losses = self(g, task_name)
-        print(f"[RANK {rank}] loss keys: {list(losses.keys())}")
         
         train_log_dict = {}
         for key, loss in losses.items():
@@ -182,7 +177,7 @@ class OMTRA(pl.LightningModule):
             sync_dist=True,
             on_step=True,
         )
-        print(f"[RANK {rank}] training_step done. Loss = {loss.item()}")
+
         return total_loss
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):

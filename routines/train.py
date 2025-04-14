@@ -114,7 +114,6 @@ def train(cfg: DictConfig):
         override_dir = None
     callbacks: List[pl.Callback] = instantiate_callbacks(cfg.callbacks, override_dir=override_dir)
 
-    print("Instantiating trainer...")
     if cfg.trainer.get("devices", 1) > 1:
         strategy = DDPStrategy(find_unused_parameters=True)
     else:
@@ -129,9 +128,6 @@ def train(cfg: DictConfig):
     )
     
     torch.cuda.empty_cache()
-    print("Starting training...")
-    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
-    print(f"[RANK {rank}] reached before fit()")
     trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
 
 

@@ -119,11 +119,8 @@ class MultiTaskSampler(Sampler):
                 raise NotImplementedError(f"Dataset {dataset_name} not supported")
 
     def get_td_pair_distributed(self):
-        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
-        print(f"[RANK {rank}] Inside get_td_pari_distributed etc.")
         # if not hasattr(self, "cpu_group"):
             # self.cpu_group = torch.distributed.new_group(backend="gloo")
-            
             
         device = torch.device(f"cuda:{self.rank}")
         if self.rank == 0:
@@ -143,10 +140,6 @@ class MultiTaskSampler(Sampler):
         # dataset_idx = dataset_idx_tensor.cpu().item()
         task_idx = task_idx_tensor.item()
         dataset_idx = dataset_idx_tensor.item()
-        print(
-            f"[RANK {rank}] After broadcast/cpu call: task_idx = {task_idx}, dataset_idx = {dataset_idx}"
-        )
-        
         
         return task_idx, dataset_idx
 
