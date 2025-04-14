@@ -136,6 +136,30 @@ residue_map = [
     "UNK", # for unkown residue types
 ]
 
+residue_to_single = {
+    "ALA": "A",
+    "ILE": "I",
+    "TRP": "W",
+    "VAL": "V",
+    "LYS": "K",
+    "ASN": "N",
+    "PHE": "F",
+    "GLN": "Q",
+    "SER": "S",
+    "GLU": "E",
+    "CYS": "C",
+    "PRO": "P",
+    "GLY": "G",
+    "HIS": "H",
+    "TYR": "Y",
+    "ASP": "D",
+    "THR": "T",
+    "MET": "M",
+    "LEU": "L",
+    "ARG": "R",
+    "UNK": "_",
+}
+
 # Taken from DrugFlow aa_atom_index
 # https://github.com/LPDI-EPFL/DrugFlow/blob/5ad8cd0b2afd6549f21527acc0e00a71a3b7b8db/src/constants.py#L60
 protein_atom_map = [
