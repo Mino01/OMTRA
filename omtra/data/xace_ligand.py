@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 import numpy as np
 from rdkit import Chem
+import dgl
 import torch
 import traceback
 from multiprocessing import Pool
@@ -189,3 +190,60 @@ def sparse_to_dense(x, a, c, e, edge_idxs):
     edge_idxs = torch.cat((upper_edge_idxs, lower_edge_idxs), dim=1)
     e = torch.cat((upper_edge_labels, upper_edge_labels))
     return x, a, c, e, edge_idxs
+
+
+def add_k_hop_edges(x, a, c, e, edge_idxs, k=2):
+    n_atoms = x.shape[0]
+    
+    edge_to_bond = {}
+    for i in range(edge_idxs.shape[0]):
+        src, dst = edge_idxs[i, 0].item(), edge_idxs[i, 1].item()
+        edge_to_bond[(src, dst)] = e[i].item()
+    
+    src_list, dst_list = [], []
+    bond_types = []
+    
+    for (src, dst), bond_type in edge_to_bond.items():
+        if (dst, src) not in edge_to_bond:
+            src_list.append(dst)
+            dst_list.append(src)
+            bond_types.append(bond_type)
+    
+    if src_list:
+        reverse_edges = torch.tensor(list(zip(src_list, dst_list)), dtype=edge_idxs.dtype)
+        bond_tensor = torch.tensor(bond_types, dtype=e.dtype)
+        
+        edge_idxs = torch.cat([edge_idxs, reverse_edges], dim=0)
+        e = torch.cat([e, bond_tensor])
+        
+        for i in range(len(src_list)):
+            edge_to_bond[(src_list[i], dst_list[i])] = bond_types[i]
+    
+    g = dgl.graph((edge_idxs[:, 0], edge_idxs[:, 1]), num_nodes=n_atoms)
+    
+    k_hop_g = dgl.khop_graph(g, k)
+    k_hop_edges = k_hop_g.edges()
+    
+    new_edges = []
+    
+    for i, j in zip(k_hop_edges[0].tolist(), k_hop_edges[1].tolist()):
+        edge = (i, j)
+        if edge not in edge_to_bond:
+            new_edges.append([i, j])
+            
+            reverse_edge = (j, i)
+            if reverse_edge not in edge_to_bond and [j, i] not in new_edges:
+                new_edges.append([j, i])
+    
+    if not new_edges:
+        print("Warning: No new edges found from k-hop graph")
+        return x, a, c, e, edge_idxs.t()
+    
+    new_edge_tensor = torch.tensor(new_edges, dtype=edge_idxs.dtype)
+    
+    k_hop_edge_type = torch.zeros(len(new_edges), dtype=e.dtype)
+    
+    updated_edge_idxs = torch.cat([edge_idxs, new_edge_tensor], dim=0)
+    updated_e = torch.cat([e, k_hop_edge_type])
+    
+    return x, a, c, updated_e, updated_edge_idxs.t()

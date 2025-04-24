@@ -95,11 +95,24 @@ class OMTRA(pl.LightningModule):
             **vector_field,
         )
 
-
         self.configure_loss_fns()
 
         self.save_hyperparameters()
-
+    
+    # some code for debugging parameter consistency issues across multiple GPUs
+    # def setup(self, stage=None):
+    #     if stage == "fit" and torch.distributed.is_initialized():
+    #         rank = torch.distributed.get_rank()
+    #         total_params = sum(p.numel() for p in self.parameters())
+    #         print(f"Rank {rank}, total parameters: {total_params}")
+            
+            # Examine parameters and their checksums
+    #         for name, param in self.named_parameters():
+                # Compute a checksum of parameter values
+                # This will detect if parameters have same shape but different values
+    #             checksum = torch.sum(param).item()
+    #             print(f"Rank {rank}, param {name}, shape {param.shape}, checksum {checksum:.4f}")  
+                           
     def configure_loss_fns(self):
 
         if self.time_scaled_loss:
@@ -145,7 +158,7 @@ class OMTRA(pl.LightningModule):
 
         # forward pass
         losses = self(g, task_name)
-
+        
         train_log_dict = {}
         for key, loss in losses.items():
             train_log_dict[f"{key}_train_loss"] = loss
@@ -164,6 +177,7 @@ class OMTRA(pl.LightningModule):
             sync_dist=True,
             on_step=True,
         )
+
         return total_loss
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
@@ -231,6 +245,7 @@ class OMTRA(pl.LightningModule):
                 weight = 1.0
             target = targets[modality.name]
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
+                losses[modality.name] = torch.tensor(0.0, device=g.device)
                 continue
             losses[modality.name] = (
                 self.loss_fn_dict[modality.name](vf_output[modality.name], target)
@@ -275,7 +290,7 @@ class OMTRA(pl.LightningModule):
                 modality_name
             ]
 
-            data_src = g.edges if modality.graph_entity == "edge" else g.nodes
+            data_src = g.nodes if modality.is_node else g.edges
             dk = modality.data_key
             source = data_src[modality.entity_name].data[f"{dk}_0"]
             target = data_src[modality.entity_name].data[f"{dk}_1_true"]
@@ -283,10 +298,9 @@ class OMTRA(pl.LightningModule):
             if modality.graph_entity == "edge":
                 conditional_path_fn = partial(conditional_path_fn, ue_mask=lig_ue_mask)
 
-            if conditional_path_name == "ctmc_mask":
-                n_categories = self.n_categories_dict[modality_name]
+            if modality.is_categorical:
                 conditional_path_fn = partial(
-                    conditional_path_fn, n_categories=n_categories
+                    conditional_path_fn, n_categories=modality.n_categories
                 )
 
             # expand alpha_t and beta_t for the nodes/edges
@@ -303,11 +317,7 @@ class OMTRA(pl.LightningModule):
 
         # for all modalities held fixed, convert the true values to the current time
         for modality in task_class.modalities_fixed:
-            if (
-                modality.n_categories is not None and modality.n_categories == 0
-            ):  # will be None for continous features (dont want to skip)
-                continue
-            data_src = g.edges if modality.graph_entity == "edge" else g.nodes
+            data_src = g.nodes if modality.is_node else g.edges
             dk = modality.data_key
             data_src[modality.entity_name].data[f"{dk}_t"] = data_src[
                 modality.entity_name
@@ -448,7 +458,24 @@ class OMTRA(pl.LightningModule):
         prior_fns = get_prior(task, self.prior_config, training=False)
         g = sample_priors(g, task, prior_fns, training=False, com=com_batch)
 
+        # set x_0 to x_t for modalities being generated
+        for m in task.modalities_generated:
+            data_src = g.nodes if m.is_node else g.edges
+            dk = m.data_key
+            data_src.data[f'{dk}_t'] = data_src.data[f'{dk}_0']
+            
+
+        # set x_1_true to x_t for modalities fixed
+        for m in task.modalities_fixed:
+            data_src = g.nodes if m.is_node else g.edges
+            dk = m.data_key
+            data_src.data[f'{dk}_t'] = data_src.data[f'{dk}_1_true']
+
         # pass graph to vector field..
+        itg_result = self.vector_field.integrate(
+            g,
+            task,
+        )
 
         # vector field returns DGL graph?
         # unbatch DGL graphs and convert to SampledSystem object
