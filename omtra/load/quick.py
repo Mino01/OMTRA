@@ -72,6 +72,7 @@ def model_from_config(cfg: DictConfig) -> OMTRA:
         task_dataset_coupling=cfg.task_group.dataset_task_coupling,
         graph_config=cfg.graph,
         dists_file=dists_file,
+        _recursive_=False,
     )
 
     return model

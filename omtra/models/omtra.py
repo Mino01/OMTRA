@@ -10,6 +10,7 @@ import itertools
 import numpy as np
 from functools import partial
 import time
+import hydra
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -37,9 +38,9 @@ class OMTRA(pl.LightningModule):
         dists_file: str,
         graph_config: DictConfig,
         conditional_paths: DictConfig,
-        optimizer: Callable,
+        optimizer: DictConfig,
+        vector_field: DictConfig,
         total_loss_weights: Dict[str, float] = {},
-        vector_field: DictConfig = None,
     ):
         super().__init__()
 
@@ -88,11 +89,11 @@ class OMTRA(pl.LightningModule):
         }
         self.time_scaled_loss = False
         self.interpolant_scheduler = InterpolantScheduler(schedule_type="linear")
-        self.vector_field =  VectorField(
+        self.vector_field =  hydra.utils.instantiate(
+            vector_field,
             td_coupling=self.td_coupling,
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
-            **vector_field,
         )
 
         self.configure_loss_fns()
@@ -256,7 +257,7 @@ class OMTRA(pl.LightningModule):
         return losses
 
     def configure_optimizers(self):
-        optimizer = self.hparams.optimizer(self.parameters())
+        optimizer = hydra.utils.instantiate(self.hparams.optimizer, params=self.parameters())
         return optimizer
 
     def sample_conditional_path(
