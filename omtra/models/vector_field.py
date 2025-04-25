@@ -18,6 +18,7 @@ from omtra.tasks.modalities import (
     Modality,
     name_to_modality,
 )
+from omtra.utils.ctmc import purity_sampling
 from omtra.utils.embedding import get_time_embedding
 from omtra.utils.graph import canonical_node_features
 from omtra.data.graph import to_canonical_etype, get_inv_edge_type
@@ -921,9 +922,10 @@ class VectorField(nn.Module):
 
         # unmask the nodes
         xt[will_unmask] = x1[will_unmask]
-
-        xt = nn.functional.one_hot(xt, num_classes=n_classes).float()
-        x1 = nn.functional.one_hot(x1, num_classes=n_classes).float()
+        
+        # NOTE: not one hot encoding for OMTRA right?
+        # xt = nn.functional.one_hot(xt, num_classes=n_classes).float()
+        # x1 = nn.functional.one_hot(x1, num_classes=n_classes).float()
         return xt, x1
 
     def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):
