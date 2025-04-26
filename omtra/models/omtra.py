@@ -10,6 +10,7 @@ import itertools
 import numpy as np
 from functools import partial
 import time
+import hydra
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
@@ -23,7 +24,7 @@ from omtra.models.vector_field import VectorField
 from omtra.models.interpolant_scheduler import InterpolantScheduler
 from omtra.data.distributions.plinder_dists import sample_n_lig_atoms_plinder, sample_n_pharms_plinder
 from omtra.data.distributions.pharmit_dists import sample_n_lig_atoms_pharmit, sample_n_pharms_pharmit
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from omtra.priors.prior_factory import get_prior
 from omtra.priors.sample import sample_priors
@@ -37,15 +38,18 @@ class OMTRA(pl.LightningModule):
         dists_file: str,
         graph_config: DictConfig,
         conditional_paths: DictConfig,
-        optimizer: Callable,
+        optimizer: DictConfig,
+        vector_field: DictConfig,
         total_loss_weights: Dict[str, float] = {},
-        vector_field: DictConfig = None,
+        ligand_encoder: DictConfig = DictConfig({}),
+        ligand_encoder_checkpoint: str = None,
     ):
         super().__init__()
 
         self.dists_file = dists_file
         self.graph_config = graph_config
         self.conditional_path_config = conditional_paths
+        self.optimizer_cfg = optimizer
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -88,16 +92,24 @@ class OMTRA(pl.LightningModule):
         }
         self.time_scaled_loss = False
         self.interpolant_scheduler = InterpolantScheduler(schedule_type="linear")
-        self.vector_field =  VectorField(
+        self.vector_field =  hydra.utils.instantiate(
+            vector_field,
             td_coupling=self.td_coupling,
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
-            **vector_field,
         )
+
+        if not ligand_encoder.is_empty():
+            self.ligand_encoder = hydra.utils.instantiate(ligand_encoder)
+            if ligand_encoder_checkpoint is not None:
+                ligand_encoder_pre = type(self.ligand_encoder).load_from_checkpoint(ligand_encoder_checkpoint)
+                self.ligand_encoder.load_state_dict(ligand_encoder_pre.state_dict())
+        else:
+            self.ligand_encoder = None
 
         self.configure_loss_fns()
 
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
     
     # some code for debugging parameter consistency issues across multiple GPUs
     # def setup(self, stage=None):
@@ -256,7 +268,7 @@ class OMTRA(pl.LightningModule):
         return losses
 
     def configure_optimizers(self):
-        optimizer = self.hparams.optimizer(self.parameters())
+        optimizer = hydra.utils.instantiate(self.optimizer_cfg, params=self.parameters())
         return optimizer
 
     def sample_conditional_path(
