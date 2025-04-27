@@ -723,6 +723,7 @@ class VectorField(nn.Module):
         **kwargs,
     ):
         # TODO: adapt flowmol integrate for hetero version
+        # TODO: figure out what should be attribute of class vs passed as arg vs pulled from cfg etc, nail down defaults
 
         if cat_temp_func is None:
             cat_temp_func = self.cat_temp_func
