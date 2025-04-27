@@ -178,6 +178,7 @@ class LigandVQVAE(pl.LightningModule):
                  mask_prob=0.10):
                  
         super().__init__()
+
         self.num_atom_types = num_atom_types+1  # Add 1 for masked atom type
         self.num_atom_charges = num_atom_charges+1  # Add 1 for masked atom charge
         self.vector_size = vector_size
@@ -210,10 +211,17 @@ class LigandVQVAE(pl.LightningModule):
                                )
         
         self.save_hyperparameters()
+        self.configure_loss_fns()
 
 
-    def forward(self, g):
+    def configure_loss_fns(self):
+        """ Define loss functions used in training """
+        self.atom_type_loss_fn = torch.nn.CrossEntropyLoss()
+        self.atom_charge_loss_fn = torch.nn.CrossEntropyLoss()
+        self.bond_order_loss_fn = torch.nn.CrossEntropyLoss()
 
+
+    def forward(self, g: dgl.DGLHeteroGraph): 
         """ Get relevant features from batched graph """
         # Get node atom types from graph and one-hot encode
         atom_types = g.nodes['lig'].data['a_1_true']    
@@ -315,10 +323,43 @@ class LigandVQVAE(pl.LightningModule):
         atom_type_logits = scalar_feats_logits[:, :self.num_atom_types]    # (num_atoms, num_atom_types)
         atom_charge_logits = scalar_feats_logits[:, self.num_atom_types:]  # (num_atoms, num_atom_charges)
 
-        recon_loss = F.cross_entropy(atom_type_logits, atom_types.long()) + F.cross_entropy(atom_charge_logits, atom_charges.long()) + F.cross_entropy(bond_order_logits, bond_orders_for_pairs.squeeze().long())   # Reconstruction loss
-        loss = loss + recon_loss
+        atom_type_loss = self.atom_type_loss_fn(atom_type_logits, atom_types.long())
+        atom_charge_loss = self.atom_charge_loss_fn(atom_charge_logits, atom_charges.long())
+        bond_order_loss = self.bond_order_loss_fn(bond_order_logits, bond_orders_for_pairs.squeeze().long())
 
-        return loss, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity
+        # recon_loss = atom_type_loss + atom_charge_loss + bond_order_loss
+        
+        losses = {'vq+comittment': loss,
+                  'atom_type': atom_type_loss,
+                  'atom_charge': atom_charge_loss,
+                  'train_bond_order': bond_order_loss}
+
+        return losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity
+    
+
+    def training_step(self, batch, batch_idx):
+        g = batch
+        
+        losses, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = self.forward(g)
+
+        train_log_dict = {}
+        for key, loss in losses.items():
+            train_log_dict[f"{key}_train_loss"] = loss
+
+        total_loss = torch.zeros(1, device=g.device, requires_grad=True)
+        for loss_name, loss_val in losses.items():
+            total_loss = total_loss + 1.0 * loss_val
+
+        self.log_dict(train_log_dict, sync_dist=True)
+        self.log("train_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True)
+        self.log("perplexity", perplexity, prog_bar=True, sync_dist=True, on_step=True)
+        
+        return total_loss
+    
+
+    def configure_optimizers(self, lr=1e-3):
+        optimizer = optim.Adam(self.parameters(), lr=lr)
+        return optimizer
 
 
 def display_graph(g):
@@ -355,7 +396,7 @@ if __name__ == "__main__":
                     num_atom_charges= num_atom_charges,
                     num_bond_orders= num_bond_orders,
                     vector_size= 4,
-                    num_gvp_layers= 1,
+                    num_gvp_layers= 2,
                     mlp_hidden_size= 128,
                     embedding_dim= 128,     
                     num_embeddings= 100, 
@@ -377,10 +418,11 @@ if __name__ == "__main__":
     model.eval()
 
     with torch.no_grad():  # No gradient tracking is needed for inference
-        loss, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = model(g)
+        loss, recon_loss, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = model(g)
 
     print("Loss:", loss)
-    print("Perplexity:", perplexity)
+    print("Reconstruction Loss:", recon_loss)
+    print("Perplexity:", perplexity, '\n')
 
 
     """
@@ -423,7 +465,7 @@ if __name__ == "__main__":
         batched_graph = next(loader_iter)
         optimizer.zero_grad()
 
-        loss, atom_types_hat, atom_charges_hat, bond_order_hat, perplexity = model(batched_graph)
+        loss, recon_loss, atom_types_hat, atom_charges_hat, bond_order_hat, perplexity = model(batched_graph)
         loss.backward()
 
         optimizer.step()
