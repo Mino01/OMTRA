@@ -215,8 +215,8 @@ class Model(nn.Module):
         x_diff = diff / d.unsqueeze(1)   # (num_edges,)
 
         d_rbf = _rbf(d, D_min=0, D_max=self.rbf_dmax, D_count=self.rbf_dim) # _rbf:  D_min=0 and D_max=10, D_count=32
-        d = {'lig_to_lig': d_rbf}   # Convert to tensor dictionary
-        x_diff = {'lig_to_lig': x_diff} # Convert to tensor dictionary
+        d = {'lig_to_lig': d_rbf}   # Pairiwise distances 
+        x_diff = {'lig_to_lig': x_diff} 
 
        
         
