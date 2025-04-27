@@ -829,6 +829,8 @@ class VectorField(nn.Module):
                 )  # log probabilities
 
                 xt, x_1_sampled = self.campbell_step(
+                    g=g,
+                    modality=modality,
                     p_1_given_t=p_s_1,
                     xt=xt,
                     stochasticity=eta,
@@ -843,9 +845,10 @@ class VectorField(nn.Module):
                     n_classes=modality.n_categories + 1,
                     mask_index=modality.n_categories + 1,
                     last_step=last_step,
-                    batch_idx=edge_batch_idxs[upper_edge_mask[modality.entity_name]]
-                    if modality.is_node
+                    batch_idx=edge_batch_idxs[modality.entity_name]
+                    if not modality.is_node
                     else node_batch_idxs[modality.entity_name],
+                    upper_edge_mask=upper_edge_mask[modality.entity_name] if not modality.is_node else None,
                 )
 
                 # if we are doing edge features, we need to modify xt and x_1_sampled to have upper and lower edges
@@ -882,6 +885,7 @@ class VectorField(nn.Module):
         mask_index: int,
         last_step: bool,
         batch_idx: torch.Tensor,
+        upper_edge_mask: Optional[torch.Tensor],
     ):
         x1 = Categorical(p_1_given_t).sample()  # has shape (num_nodes,)
 
@@ -897,7 +901,7 @@ class VectorField(nn.Module):
             # TODO: remove arguments unused by purity sampling
             will_unmask = purity_sampling(
                 g=g,
-                feat=feat,
+                modality=modality,
                 xt=xt,
                 x1_probs=p_1_given_t,
                 unmask_prob=unmask_prob,
