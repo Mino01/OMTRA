@@ -14,7 +14,7 @@ import hydra
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
 from omtra.data.graph import build_complex_graph
-from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask, copy_graph, build_lig_edge_idxs
+from omtra.data.graph.utils import get_batch_idxs, get_upper_edge_mask, copy_graph, build_lig_edge_idxs, SampledSystem
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.modalities import Modality, name_to_modality
@@ -374,7 +374,7 @@ class OMTRA(pl.LightningModule):
         if g_list is None:
             g_flat = []
             for _ in range(n_replicates):
-                g_list.append( build_complex_graph(
+                g_flat.append( build_complex_graph(
                     node_data={},
                     edge_idxs={},
                     edge_data={},
@@ -476,9 +476,13 @@ class OMTRA(pl.LightningModule):
         # sample prior distributions for each modality
         prior_fns = get_prior(task, self.prior_config, training=False)
         g = sample_priors(g, task, prior_fns, training=False, com=com_batch)
-
+        
+        # TODO: need to solidify creatioin of upper edge mask (where to do this (not just in sample), etc)
+        upper_edge_mask = {}
         # set x_0 to x_t for modalities being generated
         for m in task.modalities_generated:
+            if not m.is_node:
+                upper_edge_mask[m.entity_name] = get_upper_edge_mask(g, m.entity_name)
             data_src = g.nodes if m.is_node else g.edges
             dk = m.data_key
             data_src.data[f'{dk}_t'] = data_src.data[f'{dk}_0']
@@ -486,6 +490,8 @@ class OMTRA(pl.LightningModule):
 
         # set x_1_true to x_t for modalities fixed
         for m in task.modalities_fixed:
+            if not m.is_node:
+                upper_edge_mask[m.entity_name] = get_upper_edge_mask(g, m.entity_name)
             data_src = g.nodes if m.is_node else g.edges
             dk = m.data_key
             data_src.data[f'{dk}_t'] = data_src.data[f'{dk}_1_true']
@@ -494,10 +500,22 @@ class OMTRA(pl.LightningModule):
         itg_result = self.vector_field.integrate(
             g,
             task,
+            upper_edge_mask=upper_edge_mask,
         )
-
+        
         # vector field returns DGL graph?
         # unbatch DGL graphs and convert to SampledSystem object
+        
+        unbatched_graphs = dgl.unbatch(itg_result)
+        sampled_systems = []
+        for g_i in unbatched_graphs:
+            sampled_system = SampledSystem(
+                g=g_i,
+
+            )
+            sampled_systems.append(sampled_system)
+        return sampled_systems
+        
 
 
         
