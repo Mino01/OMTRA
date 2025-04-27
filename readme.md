@@ -15,12 +15,15 @@ chmod +x build_env.sh
 ```
 
 # TODO:
-- [ ] node output heads for pharm vec features!!!!!!!!!
 - [ ] residue type as node feature?
 - [ ] need to apply masking on node vec feature loss
 - [ ] need to consider permutation invariance for vector feature prediction?
 - [ ] CCD code frequency weighting in plinder dataset
 - [ ] sampling code
 - [ ] sampled system object, ligand builder object
-- [ ] configure optimizers
-- [ ] test gpu usage vs. batch size
+- [ ] need to remove edges in vector field forward pass
+- [ ] radius graph n edges approximation
+- [ ] don't do fully connected NPNDE... or...do?
+- [ ] there is massive utiltiy in an on-the-fly (batched) addition of radius edges overlaid on top of edges that contain bond order as an edge feature
+- [ ] what to do with pharm interaction feature
+- [ ] pharmit dataset chemical space conditoning + predictor?
