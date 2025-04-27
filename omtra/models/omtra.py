@@ -348,9 +348,9 @@ class OMTRA(pl.LightningModule):
     ):
 
         task: Task = task_name_to_class(task_name)
-        groups_generated = task.modalities_generated
+        groups_generated = task.groups_generated
         groups_present = task.groups_present
-        groups_fixed = task.modalities_fixed
+        groups_fixed = task.groups_fixed
 
         # TODO: user-supplied n_atoms dict?
 

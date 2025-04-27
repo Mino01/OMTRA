@@ -798,7 +798,7 @@ class VectorField(nn.Module):
         dt = s_i - t_i
 
         for modality in task.modalities_generated:
-            if modality.graph_entity == "node" and modality.data_key == "x":
+            if modality.is_node and modality.data_key == "x":
                 ntype = modality.entity_name
                 if g.num_nodes(ntype) == 0:
                     continue
@@ -867,6 +867,8 @@ class VectorField(nn.Module):
 
     def campbell_step(
         self,
+        g: dgl.DGLHeteroGraph,
+        modality: Modality,
         p_1_given_t: torch.Tensor,
         xt: torch.Tensor,
         stochasticity: float,
@@ -892,24 +894,23 @@ class VectorField(nn.Module):
         # sample which nodes will be unmasked
         if hc_thresh > 0:
             # select more high-confidence predictions for unmasking than low-confidence predictions
+            # TODO: remove arguments unused by purity sampling
             will_unmask = purity_sampling(
+                g=g,
+                feat=feat,
                 xt=xt,
-                x1=x1,
                 x1_probs=p_1_given_t,
                 unmask_prob=unmask_prob,
                 mask_index=mask_index,
                 batch_size=batch_size,
                 batch_num_nodes=batch_num_nodes,
-                node_batch_idx=batch_idx,
-                hc_thresh=hc_thresh,
                 device=xt.device,
+                upper_edge_mask=upper_edge_mask,
             )
         else:
             # uniformly sample nodes to unmask
             will_unmask = torch.rand(xt.shape[0], device=xt.device) < unmask_prob
-            will_unmask = will_unmask * (
-                xt == mask_index
-            )  # only unmask nodes that are currently masked
+            will_unmask = will_unmask * (xt == mask_index) # only unmask nodes that are currently mask
 
         if not last_step:
             # compute which nodes will be masked
