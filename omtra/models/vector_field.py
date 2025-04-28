@@ -716,7 +716,6 @@ class VectorField(nn.Module):
         upper_edge_mask: Dict[str, torch.Tensor],
         n_timesteps: int = 250,
         stochasticity: float = 8.0,
-        high_confidence_threshold: float = 0.9,
         cat_temp_func: Optional[Callable] = None,
         tspan=None,
         visualize=False,
