@@ -214,8 +214,16 @@ class OMTRA(pl.LightningModule):
     def validation_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
 
+        task = task_name_to_class(task_name)
+        if set(task.groups_present) == set(task.groups_generated):
+            # if the task is purely unconditional, g_list is None
+            g_list = None
+        else:
+            g_list = dgl.unbatch(g)
+
         self.eval()
-        samples = self.sample(task_name, g_list=dgl.unbatch(g), n_replicates=2)
+        # TODO: n_replicates and n_timesteps should not be hard-coded
+        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=20)
         samples = [s.to("cpu") for s in samples if s is not None]
 
         eval_fn = get_eval(task_name)
@@ -223,6 +231,9 @@ class OMTRA(pl.LightningModule):
         if metrics:
             self.log_dict(metrics, sync_dist=True, batch_size=1)
         self.train()
+
+        # TODO: compute evals and log them
+        return 0.0
 
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
         # sample time
@@ -383,6 +394,8 @@ class OMTRA(pl.LightningModule):
             torch.Tensor
         ] = None,  # center of mass for adding ligands/pharms to systems
         unconditional_n_atoms_dist: str = "plinder",  # distribution to use for sampling number of atoms in unconditional tasks
+        n_timesteps: int = None,
+        device: Optional[torch.device] = None,
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -390,6 +403,12 @@ class OMTRA(pl.LightningModule):
         groups_fixed = task.groups_fixed
 
         # TODO: user-supplied n_atoms dict?
+
+
+        if device is None and g_list is not None:
+            device = g_list[0].device
+        elif device is None:
+            device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
@@ -400,6 +419,7 @@ class OMTRA(pl.LightningModule):
 
         # if this is purely unconditional sampling
         # we create initial graphs with no data
+        protein_present = "protein_structure" in groups_present
         g_flat: List[dgl.DGLHeteroGraph] = []
         if g_list is None:
             g_flat = []
@@ -411,7 +431,7 @@ class OMTRA(pl.LightningModule):
                         edge_data={},
                     )
                 )
-            coms_flat = [None] * len(g_flat)
+            coms_flat = [torch.zeros(3, dtype=float)] * len(g_flat)
         else:
             # otherwise, we need to copy the graphs out n_replicates times
             g_flat: List[dgl.DGLHeteroGraph] = []
@@ -419,15 +439,16 @@ class OMTRA(pl.LightningModule):
             for idx, g_i in enumerate(g_list):
                 g_flat.extend(copy_graph(g_i, n_replicates))
 
-                if coms is None:
+                if coms is None and protein_present:
                     com_i = g_i.nodes["prot_atom"].data["x_1_true"].mean(dim=0)
+                elif coms is None and not protein_present:
+                    com_i = torch.zeros(3, dtype=float)
                 else:
                     com_i = coms[idx]
 
                 coms_flat.extend([com_i] * n_replicates)
 
         # TODO: sample number of ligand atoms
-        protein_present = "protein_structure" in groups_present
         add_ligand = "ligand_identity" in groups_generated
         if protein_present and add_ligand:
             n_prot_atoms = torch.tensor([g.num_nodes("prot_atom") for g in g_flat])
@@ -523,11 +544,8 @@ class OMTRA(pl.LightningModule):
                 )
 
         # TODO: batch the graphs
-        g = dgl.batch(g_flat)
-        if coms_flat[0] is None:
-            com_batch = None
-        else:
-            com_batch = torch.stack(coms_flat, dim=0)
+        g = dgl.batch(g_flat).to(device)
+        com_batch = torch.stack(coms_flat, dim=0).to(device)
 
         # sample prior distributions for each modality
         prior_fns = get_prior(task, self.prior_config, training=False)
@@ -540,7 +558,7 @@ class OMTRA(pl.LightningModule):
             if not m.is_node:
                 if g.num_edges(m.entity_name) == 0:
                     continue
-                upper_edge_mask[m.entity_name] = get_upper_edge_mask(g, m.entity_name)
+                upper_edge_mask[m.entity_name] = get_upper_edge_mask(g, m.entity_name).to(device)
             else:
                 if g.num_nodes(m.entity_name) == 0:
                     continue
@@ -561,16 +579,28 @@ class OMTRA(pl.LightningModule):
             dk = m.data_key
             data_src.data[f"{dk}_t"] = data_src.data[f"{dk}_1_true"]
 
+
+        # optionally set the number of timesteps for the integration
+        # TODO: there should be a cleaner way to do this
+        # the only reason i'm allowing it to be none by default and manually adding it in
+        # is that i don't want to define a default number of timesteps in more than one palce
+        # it is already defined as default arg to VectorField.integrate
+        itg_kwargs = {}
+        if n_timesteps is not None:
+            itg_kwargs["n_timesteps"] = n_timesteps
+
         # pass graph to vector field..
         itg_result = self.vector_field.integrate(
             g,
             task,
             upper_edge_mask=upper_edge_mask,
+            **itg_kwargs
         )
 
-        # vector field returns DGL graph?
+        # integrate returns just a DGL graph for now
+        # in the future, when we implement trajectory visualization, it will be a graph + some data structure for trajectory frames
+        
         # unbatch DGL graphs and convert to SampledSystem object
-
         unbatched_graphs = dgl.unbatch(itg_result)
         sampled_systems = []
         for g_i in unbatched_graphs:
