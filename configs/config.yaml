@@ -2,7 +2,7 @@ defaults:
   - _self_
   - model: default
   - ligand_encoder: none
-  - trainer: default
+  - trainer: distributed
   - task_group: protein
   - graph: default
   - prior: default
