@@ -210,6 +210,13 @@ class OMTRA(pl.LightningModule):
             sync_dist=True,
             on_step=True,
         )
+        self.log(
+            "train_total_loss",
+            total_loss,
+            prog_bar=True,
+            sync_dist=True,
+            on_step=True,
+        )
 
         return total_loss
 
