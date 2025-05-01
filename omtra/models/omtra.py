@@ -10,6 +10,7 @@ import itertools
 import numpy as np
 from functools import partial
 import time
+from pathlib import Path
 import hydra
 
 from omtra.load.conf import TaskDatasetCoupling, build_td_coupling
@@ -58,8 +59,14 @@ class OMTRA(pl.LightningModule):
         ligand_encoder: DictConfig = DictConfig({}),
         ligand_encoder_checkpoint: Optional[str] = None,
         prior_config: Optional[DictConfig] = None,
+        k_checkpoints: int = 20,
+        checkpoint_interval: int = 1000,
     ):
         super().__init__()
+
+
+        self.k_checkpoints: int = k_checkpoints
+        self.checkpoint_interval: int = checkpoint_interval
 
         self.dists_file = dists_file
         self.graph_config = graph_config
@@ -143,6 +150,22 @@ class OMTRA(pl.LightningModule):
     #             checksum = torch.sum(param).item()
     #             print(f"Rank {rank}, param {name}, shape {param.shape}, checksum {checksum:.4f}")
 
+    def manual_checkpoint(self, batch_idx: int):
+        if self.global_rank == 0 and batch_idx % self.checkpoint_interval == 0 and batch_idx != 0:
+            log_dir = self.trainer.log_dir
+            checkpoint_dir = Path(log_dir) / "checkpoints"
+
+            current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
+            current_checkpoints.sort(key=lambda x: x.stem.split("_")[-1])
+            if len(current_checkpoints) >= self.k_checkpoints:
+                # remove the oldest checkpoint
+                oldest_checkpoint = current_checkpoints[0]
+                oldest_checkpoint.unlink()
+
+            checkpoint_path = checkpoint_dir / f'batch_{batch_idx}.ckpt'
+            self.save_checkpoint(str(checkpoint_path))
+                
+    
     def configure_loss_fns(self):
         if self.time_scaled_loss:
             reduction = "none"
@@ -170,6 +193,8 @@ class OMTRA(pl.LightningModule):
 
     def training_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
+
+        self.manual_checkpoint(batch_idx)
 
         # get the total batch size across all devices
         local_batch_size = torch.tensor([g.batch_size], device=g.device)
