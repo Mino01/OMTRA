@@ -14,6 +14,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
 import numpy as np
 import biotite.structure as struc
+from copy import deepcopy
 
 '''
 def get_upper_edge_mask(g: dgl.DGLHeteroGraph, etype: str):
@@ -153,7 +154,8 @@ class SampledSystem:
         self,
         g: dgl.DGLHeteroGraph,
         fake_atoms: bool = False,  # whether the molecule contains fake atoms,
-        exclude_charges: bool = False,
+        ctmc_mol: bool = True,
+        exclude_charges: bool = False, # TODO: remove  this option and all its effects
         ligand_atom_type_map: List[str] = lig_atom_type_map,
         npnde_atom_type_map: List[str] = npnde_atom_type_map,
         protein_atom_type_map: List[str] = protein_atom_map,
@@ -164,6 +166,7 @@ class SampledSystem:
     ):
         self.g = g
         self.fake_atoms = fake_atoms
+        self.ctmc_mol = ctmc_mol
         self.exclude_charges = exclude_charges
         self.ligand_atom_type_map = ligand_atom_type_map
         self.npnde_atom_type_map = npnde_atom_type_map
@@ -172,6 +175,14 @@ class SampledSystem:
         self.bond_type_map = bond_type_map
         self.charge_map = charge_map
         self.protein_element_map = protein_element_map
+
+        if self.fake_atoms:
+            self.ligand_atom_type_map = deepcopy(self.ligand_atom_type_map)
+            self.ligand_atom_type_map.append("Sn") # fake atoms appear as Sn
+
+        if self.ctmc_mol:
+            self.ligand_atom_type_map = deepcopy(self.ligand_atom_type_map)
+            self.ligand_atom_type_map.append("Se") # masked atoms appear as Se
     
     def to(self, device: str):
         self.g = self.g.to(device)
@@ -327,7 +338,7 @@ class SampledSystem:
             bond_types,
             bond_src_idxs,
             bond_dst_idxs,
-        ) = self.extract_ligdata_from_graph()
+        ) = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol)
         rdkit_mol = self.build_molecule(
             positions,
             atom_types,
@@ -370,13 +381,22 @@ class SampledSystem:
         if self.exclude_charges:
             atom_charges = None
         else:
+            charge_data = lig_g.ndata["c_1"].clone()
+
+            # set masked charges to 0
+            if ctmc_mol:
+                masked_charge = charge_data == len(self.charge_map)
+                neutral_index = self.charge_map.index(0)
+                charge_data[masked_charge] = neutral_index
+        
             atom_charges = (
-                self.charge_map[int(charge)] for charge in lig_g.ndata["c_1"]
+                self.charge_map[int(charge)] for charge in charge_data
             )
 
         # get bond types and atom indicies for every edge, convert types from simplex to integer
-        bond_types = lig_g.edata["e_1"]
-        bond_types[bond_types == 5] = 0  # set masked bonds to 0
+        bond_types = lig_g.edata["e_1"].clone()
+        masked_bonds = bond_types == len(self.bond_type_map)
+        bond_types[masked_bonds] = 0 # set masked bonds to 0 (unbonded)
         bond_src_idxs, bond_dst_idxs = lig_g.edges()
 
         # get just the upper triangle of the adjacency matrix
