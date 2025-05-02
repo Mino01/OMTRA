@@ -11,9 +11,9 @@ task_phases:
   - duration_batches: 500  # first 10k batches
     tasks:
       - name: denovo_ligand
-        probability: 0.25
+        probability: 0.6
       - name: ligand_conformer
-        probability: 0.75
+        probability: 0.4
   
   - duration_batches: null  # remaining batches (no upper limit)
     tasks:

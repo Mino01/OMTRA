@@ -3,5 +3,5 @@ accelerator: "gpu"
 devices: 1
 max_steps: ${max_steps}
 
-limit_val_batches: 1 # how many batches to use for validation
-val_check_interval: 200 # after how many training steps do we do a validation step
+limit_val_batches: 2 # how many batches to use for validation
+val_check_interval: 300 # after how many training steps do we do a validation step

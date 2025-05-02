@@ -908,9 +908,9 @@ class VectorField(nn.Module):
                 else g.batch_num_nodes(m.entity_name),
                 mask_index=m.n_categories,
                 last_step=last_step,
-                batch_idx=edge_batch_idxs[m.entity_name]
-                if not m.is_node
-                else node_batch_idxs[m.entity_name],
+                # batch_idx=edge_batch_idxs[m.entity_name]
+                # if not m.is_node
+                # else node_batch_idxs[m.entity_name],
                 upper_edge_mask=upper_edge_mask[m.entity_name]
                 if not m.is_node
                 else None,
