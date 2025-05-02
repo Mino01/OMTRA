@@ -82,6 +82,22 @@ def omtra_from_config(cfg: DictConfig) -> OMTRA:
 
     return model
 
+def omtra_from_checkpoint(ckpt_path: str) -> OMTRA:
+    """
+    Load the OMTRA model from a checkpoint.
+    
+    Args:
+        ckpt_path (str): Path to the checkpoint file.
+    
+    Returns:
+        model: The loaded OMTRA model.
+    """
+
+    # load model
+    model = OMTRA.load_from_checkpoint(ckpt_path)
+
+    return model
+
 def lig_encoder_from_config(cfg: DictConfig):
 
     # check that ligand_encoder is set

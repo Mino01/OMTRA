@@ -76,7 +76,6 @@ class MultiTaskDataModule(pl.LightningDataModule):
             )
 
     def load_dataset(self, split: str):
-        # TODO: tasks should just be absored into multitask_dataset_config
         return MultitaskDataSet(split, 
                              td_coupling=self.td_coupling,
                              graph_config=self.graph_config,

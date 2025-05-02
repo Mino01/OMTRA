@@ -56,7 +56,7 @@ def train(cfg: DictConfig):
         raise ValueError(f"mode {mode} not recognized, must be 'omtra' or 'ligand_encoder'")
     
     # figure out if we are resuming a previous run
-    resume = cfg.get("ckpt_path") is not None
+    resume = cfg.get("checkpoint") is not None
 
     wandb_config = cfg.wandb_conf
     if resume:
@@ -121,7 +121,7 @@ def train(cfg: DictConfig):
     )
     
     torch.cuda.empty_cache()
-    trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+    trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.get("checkpoint"))
 
 
     # datamodule.setup(stage='fit')
@@ -139,7 +139,7 @@ def main(cfg: DictConfig):
     cfg is a DictConfig configuration composed by Hydra.
     """
 
-    resume = cfg.get('ckpt_path') is not None
+    resume = cfg.get('checkpoint') is not None
     if resume:
         ckpt_path = Path(cfg.ckpt_path)
         run_dir = ckpt_path.parent.parent

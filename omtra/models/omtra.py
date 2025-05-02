@@ -258,7 +258,7 @@ class OMTRA(pl.LightningModule):
         # print(f"validation step {batch_idx} for task {task_name} and dataset {dataset_name}, rank={self.global_rank}", flush=True)
         device = g.device
         task = task_name_to_class(task_name)
-        if set(task.groups_present) == set(task.groups_generated):
+        if task.unconditional:
             # if the task is purely unconditional, g_list is None
             g_list = None
         else:
@@ -457,7 +457,7 @@ class OMTRA(pl.LightningModule):
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph
-        if set(groups_generated) != set(groups_present) and g_list is None:
+        if task.unconditional and g_list is None:
             raise ValueError(
                 f"Task {task_name} requires a user-provided graphs with conditional information, but none was provided."
             )
