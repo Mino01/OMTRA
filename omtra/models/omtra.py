@@ -372,8 +372,7 @@ class OMTRA(pl.LightningModule):
     ):
         # TODO: support arbitrary alpha and beta functions, independently for each modality
         modalities_generated = task_class.modalities_generated
-        alpha_t = {modality.name: 1 - t for modality in modalities_generated}
-        beta_t = {modality.name: t for modality in modalities_generated}
+        alpha_t, beta_t = self.interpolant_scheduler.weights(t, task_class)
 
         # for all modalities being generated, sample the conditional path
         conditonal_path_fns = get_conditional_path_fns(

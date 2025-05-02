@@ -737,10 +737,8 @@ class VectorField(nn.Module):
         # TODO: in FlowMol, we assumed there was an inteprolant alpha_t as the weight on the data distribution and that the weight on the prior was 1 - alpha_t
         # i want to make this more general, assume we have alpha_t (weight on data) and beta_t (weight on prior)...conditional path functions were already written
         # under this assumption, but i might have flipped alpha and beta from how i described them above
-        alpha_t = self.interpolant_scheduler.alpha_t(
-            t, task
-        )  # has shape (n_timepoints, )
-        alpha_t_prime = self.interpolant_scheduler.alpha_t_prime(t, task)
+        alpha_t, beta_t = self.interpolant_scheduler.weights(t, task)
+        alpha_t_prime, beta_t_prime = self.interpolant_scheduler.weight_derivative(t, task)
 
         if visualize:
             raise NotImplementedError("visualization not implemented yet")
@@ -752,9 +750,12 @@ class VectorField(nn.Module):
             # get the next timepoint (s) and the current timepoint (t)
             s_i = t[s_idx]
             t_i = t[s_idx - 1]
-            alpha_t_i = alpha_t[s_idx - 1]
-            alpha_s_i = alpha_t[s_idx]
-            alpha_t_prime_i = alpha_t_prime[s_idx - 1]
+            alpha_t_i = { k: alpha_t[k][s_idx - 1] for k in alpha_t }
+            alpha_s_i = { k: alpha_t[k][s_idx] for k in alpha_t }
+            alpha_t_prime_i = { k: alpha_t_prime[k][s_idx - 1] for k in alpha_t }
+            beta_t_i = { k: beta_t[k][s_idx - 1] for k in beta_t }
+            beta_s_i = { k: beta_t[k][s_idx] for k in beta_t }
+            beta_t_prime_i = { k: beta_t_prime[k][s_idx - 1] for k in beta_t }
 
             # determine if this is the last integration step
             if s_idx == t.shape[0] - 1:
@@ -771,6 +772,9 @@ class VectorField(nn.Module):
                 alpha_t_i=alpha_t_i,
                 alpha_s_i=alpha_s_i,
                 alpha_t_prime_i=alpha_t_prime_i,
+                beta_t_i=beta_t_i,
+                beta_s_i=beta_s_i,
+                beta_t_prime_i=beta_t_prime_i,
                 node_batch_idxs=node_batch_idxs,
                 edge_batch_idxs=edge_batch_idxs,
                 upper_edge_mask=upper_edge_mask,
@@ -807,6 +811,9 @@ class VectorField(nn.Module):
         alpha_t_i: Dict[str, torch.Tensor],
         alpha_s_i: Dict[str, torch.Tensor],
         alpha_t_prime_i: Dict[str, torch.Tensor],
+        beta_t_i: Dict[str, torch.Tensor],
+        beta_s_i: Dict[str, torch.Tensor],
+        beta_t_prime_i: Dict[str, torch.Tensor],
         node_batch_idxs: Dict[str, torch.Tensor],
         edge_batch_idxs: Dict[str, torch.Tensor],
         upper_edge_mask: Dict[str, torch.Tensor],
@@ -858,7 +865,7 @@ class VectorField(nn.Module):
 
             x_1 = dst_dict[m.name]
             x_t = data_src[m.entity_name].data[f"{m.data_key}_t"]
-            vf = self.vector_field(x_t, x_1, alpha_t_i[m.name], alpha_t_prime_i[m.name])
+            vf = self.vector_field(x_t, x_1, alpha_t_i[m.name], alpha_t_prime_i[m.name], beta_t_i[m.name], beta_t_prime_i[m.name])
             data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + dt * vf
             data_src[m.entity_name].data[f"{m.data_key}_1_pred"] = x_1.detach().clone()
 
@@ -885,14 +892,15 @@ class VectorField(nn.Module):
 
             # TODO: other discrete sampling methods?
             # TODO: path planning, probably in place of purity sampling
+            # TODO: campbell step assumes alpha_t = 1 - beta_t; need to change behavior if this is ever not the case
             xt, x_1_sampled = self.campbell_step(
                 g=g,
                 m=m,
                 p_1_given_t=p_s_1,
                 xt=xt,
                 stochasticity=eta,
-                alpha_t=alpha_t_i[m.name],
-                alpha_t_prime=alpha_t_prime_i[m.name],
+                beta_t=beta_t_i[m.name],
+                beta_t_prime=beta_t_prime_i[m.name],
                 dt=dt,
                 batch_size=g.batch_size,
                 batch_num_nodes=g.batch_num_edges(m.entity_name) // 2
@@ -932,20 +940,18 @@ class VectorField(nn.Module):
         p_1_given_t: torch.Tensor,
         xt: torch.Tensor,
         stochasticity: float,
-        alpha_t: torch.Tensor,
-        alpha_t_prime: torch.Tensor,
+        beta_t: torch.Tensor,
+        beta_t_prime: torch.Tensor,
         dt,
         batch_size: int,
         batch_num_nodes: torch.Tensor,
         mask_index: int,
         last_step: bool,
-        batch_idx: torch.Tensor,
         upper_edge_mask: Optional[torch.Tensor],
-        use_conflict_remasking: bool = False,
     ):
         x1 = Categorical(p_1_given_t).sample()  # has shape (num_nodes,)
 
-        unmask_prob = dt * (alpha_t_prime + stochasticity * alpha_t) / (1 - alpha_t)
+        unmask_prob = dt * (beta_t_prime + stochasticity * beta_t) / (1 - beta_t)
         mask_prob = dt * stochasticity
 
         unmask_prob = torch.clamp(unmask_prob, min=0, max=1)
@@ -987,8 +993,10 @@ class VectorField(nn.Module):
 
         return xt, x1
 
-    def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime):
-        vf = alpha_t_prime / (1 - alpha_t) * (x_1 - x_t)
+    def vector_field(self, x_t, x_1, alpha_t, alpha_t_prime, beta_t, beta_t_prime):
+        term_1 = alpha_t_prime/alpha_t*x_t
+        term_2 = (alpha_t*beta_t_prime - beta_t*alpha_t_prime)/alpha_t*x_1
+        vf = term_1 + term_2
         return vf
 
     def build_cat_temp_schedule(
