@@ -65,9 +65,7 @@ def get_edges_for_task(task: Task, graph_config: DictConfig) -> set:
             continue
         task_edges.add(etype)
     return task_edges
-from line_profiler import LineProfiler
 
-@profile
 def build_complex_graph(
     node_data: Dict[str, Dict[str, torch.Tensor]],
     edge_idxs: Dict[str, torch.Tensor],
