@@ -9,7 +9,7 @@ from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.dataset.dataset import OMTRADataset
 from omtra.tasks.tasks import Task
 from collections import OrderedDict
-from line_profiler import LineProfiler
+# from line_profiler import LineProfiler
 
 class ZarrDataset(OMTRADataset):
 
@@ -46,7 +46,7 @@ class ZarrDataset(OMTRADataset):
         for array_name in self.array_keys:
             self.chunk_fetchers[array_name] = ChunkFetcher(self.root, array_name, cache_size=self.n_chunks_cache)
 
-    @profile
+    # @profile
     def slice_array(self, array_name, start_idx, end_idx=None):
         """Slice data from a zarr array but utilize chunk caching to minimize disk access."""
 
