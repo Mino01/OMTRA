@@ -277,7 +277,10 @@ class OMTRA(pl.LightningModule):
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
+            sample_count_key = f"{task_name}_{dataset_name}_sample_count"
+            metrics[sample_count_key] = self.sample_counts[(task_name, dataset_name)]
             self.log_dict(metrics, sync_dist=True, batch_size=1, on_step=True)
+
         self.train()
         
         return 0.0
