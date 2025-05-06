@@ -46,6 +46,8 @@ warnings.filterwarnings(
     module="zarr.codecs.vlen_utf8"
 )
 
+from line_profiler import LineProfiler
+
 
 class PlinderDataset(ZarrDataset):
     def __init__(
@@ -394,6 +396,7 @@ class PlinderDataset(ZarrDataset):
             )
         return x_0
 
+    @profile
     def convert_protein(
         self,
         holo: StructureData,
@@ -539,7 +542,7 @@ class PlinderDataset(ZarrDataset):
                 
         return prot_atom_covalent_lig, prot_res_covalent_lig
         
-        
+    @profile
     def convert_ligand(
         self,
         ligand: LigandData,
@@ -764,6 +767,7 @@ class PlinderDataset(ZarrDataset):
 
         return node_data, edge_idxs, edge_data
 
+    @profile
     def convert_system(
         self,
         system: SystemData,
@@ -813,6 +817,7 @@ class PlinderDataset(ZarrDataset):
 
         return node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask
 
+    @profile
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)
