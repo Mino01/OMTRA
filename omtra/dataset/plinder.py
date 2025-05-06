@@ -446,13 +446,6 @@ class PlinderDataset(ZarrDataset):
         #    want rows where *both* entries match, then any match across M
         pocket_mask = eq.all(dim=2).any(dim=1)   # (N,)
 
-        # pocket_mask = torch.zeros_like(prot_res_ids, dtype=torch.bool)
-        # for i in range(len(prot_res_ids)):
-        #     chain_id = holo.chain_ids[i]
-        #     res_id = prot_res_ids[i].item()
-        #     if (chain_id, res_id) in pocket_res_identifiers:
-        #         pocket_mask[i] = True
-
         node_data["prot_atom"] = {
             "x_1_true": prot_coords[pocket_mask],
             "a_1_true": prot_atom_names[pocket_mask],
@@ -475,12 +468,13 @@ class PlinderDataset(ZarrDataset):
             dtype=torch.long,
         )
 
-        backbone_pocket_mask = torch.zeros_like(backbone_res_ids, dtype=torch.bool)
-        for i in range(len(backbone_res_ids)):
-            chain_id = holo.backbone.chain_ids[i]
-            res_id = backbone_res_ids[i].item()
-            if (chain_id, res_id) in pocket_res_identifiers:
-                backbone_pocket_mask[i] = True
+        # Vectorized construction of backbone_pocket_mask
+        # 1. Stack backbone (chain_idx, res_id) pairs into a (N_bb, 2) tensor
+        backbone_pairs = torch.stack((backbone_chain_ids, backbone_res_ids), dim=1)
+        # 2. Compare each backbone pair against all pocket pairs (broadcasted)
+        eq_bb = backbone_pairs.unsqueeze(1) == pocket_pairs_tensor.unsqueeze(0)
+        # 3. Mask true where both chain and residue match any pocket pair
+        backbone_pocket_mask = eq_bb.all(dim=2).any(dim=1)
 
         node_data["prot_res"] = {
             "x_1_true": backbone_coords[backbone_pocket_mask],
