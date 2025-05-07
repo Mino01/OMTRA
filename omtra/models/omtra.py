@@ -45,6 +45,7 @@ from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
 from omtra.eval.utils import add_task_prefix
 
+# from line_profiler import profile
 
 class OMTRA(pl.LightningModule):
     def __init__(
@@ -197,6 +198,7 @@ class OMTRA(pl.LightningModule):
             else:
                 self.loss_fn_dict[modality.name] = nn.MSELoss(reduction=reduction)
 
+    # @profile
     def training_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
 
@@ -277,11 +279,15 @@ class OMTRA(pl.LightningModule):
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
+            sample_count_key = f"{task_name}_{dataset_name}_sample_count"
+            metrics[sample_count_key] = self.sample_counts[(task_name, dataset_name)]
             self.log_dict(metrics, sync_dist=True, batch_size=1, on_step=True)
+
         self.train()
         
         return 0.0
 
+    # @profile
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
         # sample time
         # TODO: what are time sampling methods used in other papers?
