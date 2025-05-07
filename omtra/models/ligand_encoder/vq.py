@@ -135,7 +135,8 @@ class VectorQuantizer(nn.Module):
         distances = (torch.sum(z_e**2, dim=1, keepdim=True)         # (num_atoms, num_embeddings)
                     + torch.sum(self.embedding.weight**2, dim=1)
                     - 2 * torch.matmul(z_e, self.embedding.weight.t()))
-            
+        
+        
         # Encoding
         encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)  # Get indices of closest codebook (embedding) vector
         quantized = self.embedding(encoding_indices).squeeze(1)   # (num_atoms, embedding_dim)
@@ -145,14 +146,79 @@ class VectorQuantizer(nn.Module):
         vq_loss = F.mse_loss(quantized, z_e.detach())
         loss = vq_loss + self.commitment_cost * commitment_loss
         
-        # Perplexity 
+        # Straight through estimator
         quantized = z_e + (quantized - z_e).detach()
+
+        # Perplexity
         encodings = F.one_hot(encoding_indices, num_classes=self.embedding.num_embeddings).squeeze(1).float()
         avg_probs = torch.mean(encodings, dim=0)  
         perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))    #  "spread" of the quantized embeddings. Indicates how well the codebook is being used 
         
         return loss, quantized, perplexity
     
+
+class VectorQuantizerEMA(nn.Module):
+    def __init__(self, num_embeddings, embedding_dim, commitment_cost, decay, epsilon):
+        super(VectorQuantizerEMA, self).__init__()
+        
+        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings
+        
+        self.embedding = nn.Embedding(self.num_embeddings, self.embedding_dim) 
+        self.embedding.weight.data.normal_()
+
+        self.register_buffer('ema_cluster_size', torch.zeros(num_embeddings))  # Running average of how frequently each codebook vector is used during training
+
+        self.ema_w = nn.Parameter(torch.Tensor(num_embeddings, self.embedding_dim))   
+        self.ema_w.data.normal_()   # EMA of the summed inputs assigned to each codebook vector
+
+        self.commitment_cost = commitment_cost
+        self.decay = decay
+        self.epsilon = epsilon
+
+
+    def forward(self, z_e):
+        # z_e = (n_atoms, embedding_dim)
+        # embedding = (num_embeddings, embedding_dim)
+
+        distances = (torch.sum(z_e**2, dim=1, keepdim=True)         # (num_atoms, num_embeddings)
+                    + torch.sum(self.embedding.weight**2, dim=1)
+                    - 2 * torch.matmul(z_e, self.embedding.weight.t()))
+        
+            
+        # Encoding
+        encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)  # Get indices of closest codebook (embedding) vector
+        encodings = F.one_hot(encoding_indices, num_classes=self.embedding.num_embeddings).squeeze(1).float()
+        quantized = self.embedding(encoding_indices).squeeze(1)   # (num_atoms, embedding_dim)
+
+        if self.training:
+            self.ema_cluster_size = self.ema_cluster_size * self.decay + \
+                                     (1 - self.decay) * torch.sum(encodings, 0)
+            
+            # Laplace smoothing of the cluster size
+            n = torch.sum(self.ema_cluster_size.data)
+            self.ema_cluster_size = (
+                (self.ema_cluster_size + self.epsilon)
+                / (n + self.num_embeddings * self.epsilon) * n)
+            
+            dw = torch.matmul(encodings.t(), z_e)
+            self.ema_w = nn.Parameter(self.ema_w * self.decay + (1 - self.decay) * dw)
+            
+            self.embedding.weight = nn.Parameter(self.ema_w / self.ema_cluster_size.unsqueeze(1))
+            
+
+        # Loss
+        commitment_loss = F.mse_loss(quantized.detach(), z_e)
+        loss = self.commitment_cost * commitment_loss
+        
+        # Straight through estimator
+        quantized = z_e + (quantized - z_e).detach()
+
+        # Perplexity
+        avg_probs = torch.mean(encodings, dim=0)  
+        perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))    #  "spread" of the quantized embeddings. Indicates how well the codebook is being used 
+        
+        return loss, quantized, perplexity
 
 
 class Decoder(nn.Module):
@@ -233,7 +299,10 @@ class LigandVQVAE(pl.LightningModule):
                  e_embed_dim=8,
                  rbf_dim=32,
                  rbf_dmax=10,
-                 mask_prob=0.10):
+                 mask_prob=0.10,
+                 use_ema=True,
+                 decay=0.99,
+                 epsilon=1e-5,):
                  
         super().__init__()
 
@@ -258,16 +327,25 @@ class LigandVQVAE(pl.LightningModule):
                                rbf_dim = self.rbf_dim,
                                rbf_dmax = self.rbf_dmax)
 
-        self.vq_vae = VectorQuantizer(num_embeddings = num_embeddings,
+
+        if use_ema: # Exponential Moving Average codebook vector updates
+            self.vq_vae = VectorQuantizerEMA(num_embeddings = num_embeddings,
+                                      embedding_dim = latent_dim,
+                                      commitment_cost = commitment_cost,
+                                      decay = decay,
+                                      epsilon = epsilon)
+        else:
+            self.vq_vae = VectorQuantizer(num_embeddings = num_embeddings,
                                       embedding_dim = latent_dim,
                                       commitment_cost = commitment_cost)
-       
+            
+        
         self.decoder = Decoder(latent_dim = latent_dim,
-                               num_decod_hiddens = num_decod_hiddens,
-                               num_bond_decod_hiddens = num_bond_decod_hiddens,
-                               rbf_dim=self.rbf_dim,
-                               rbf_dmax=self.rbf_dmax
-                               )
+                            num_decod_hiddens = num_decod_hiddens,
+                            num_bond_decod_hiddens = num_bond_decod_hiddens,
+                            rbf_dim=self.rbf_dim,
+                            rbf_dmax=self.rbf_dmax
+                            )
         
         self.save_hyperparameters()
         self.configure_loss_fns()
@@ -333,14 +411,4 @@ class LigandVQVAE(pl.LightningModule):
     def configure_optimizers(self, lr=1e-4):
         optimizer = optim.Adam(self.parameters(), lr=lr)
         return optimizer
-
-
-def display_graph(g):
-    """" Displays node and edge feature shapes for a dgl graph """
-
-    print("\nNode Features:")
-    print("x:", g.nodes['lig'].data['x_1_true'].shape)
-    print("a:", g.nodes['lig'].data['a_1_true'].shape)
-    print("c", g.nodes['lig'].data['c_1_true'].shape)
-    print("e:", g.edges['lig_to_lig'].data['e_1_true'].shape)
 
