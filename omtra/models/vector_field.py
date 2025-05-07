@@ -685,7 +685,7 @@ class VectorField(nn.Module):
                     g.nodes[ntype].data["x_d"] = node_positions[ntype]
 
             for etype in self.edge_types:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff"), etype=etype)
                 dij = _norm_no_nan(g.edges[etype].data["x_diff"], keepdims=True) + 1e-8
