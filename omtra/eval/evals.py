@@ -73,6 +73,7 @@ def protein_ligand_denovo(sampled_systems: List[SampledSystem]):
 @register_eval("predapo_conditioned_ligand_docking")
 @register_eval("expapo_conditioned_ligand_docking")
 @register_eval("flexible_docking")
+@register_eval("rigid_docking")
 def flexible_docking(sampled_systems: List[SampledSystem]):
     metrics = compute_peppr_metrics_ref(sampled_systems)
     return metrics
