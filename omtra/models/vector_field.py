@@ -34,6 +34,7 @@ from omtra.constants import (
 
 from omtra.data.graph.utils import get_batch_idxs
 
+# from line_profiler import LineProfiler
 
 class VectorField(nn.Module):
     def __init__(
@@ -339,6 +340,7 @@ class VectorField(nn.Module):
                 rbf_dmax=rbf_dmax,
             )
 
+    # @profile
     def forward(
         self,
         g: dgl.DGLGraph,
