@@ -166,6 +166,20 @@ class FlexibleDocking(Task):
         'type': 'target_dependent_gaussian',
     }
     conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
+    
+
+@register_task("rigid_docking")
+class RigidDocking(Task):
+    """Docking a ligand into the protein structure, assuming no knowledge of the protein structure at t=0"""
+
+    groups_fixed = ["ligand_identity", "protein_identity", "protein_structure"]
+    groups_generated = ["ligand_structure"]
+
+    priors = deepcopy(pc.ligand_conformer)
+    priors["npnde_x"] = {
+        "type": "target_dependent_gaussian",
+    }
+    conditional_paths = dict(**cpc.ligand_conformer, **cpc.protein)
 
 @register_task("expapo_conditioned_ligand_docking")
 class ExpApoConditionedLigandDocking(Task):
