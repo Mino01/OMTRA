@@ -112,7 +112,7 @@ def write_mols_to_sdf(mols, filename):
             writer.write(mol)
     writer.close()
 
-def write_arrays_to_pdb(arrays, filename):
+def write_arrays_to_cif(arrays, filename):
     cif_file = CIFFile()
     arr_stack = struc.stack(arrays)
     struc.io.pdbx.set_structure(cif_file, arr_stack)
@@ -192,8 +192,9 @@ def main(args):
             write_mols_to_sdf(xt_traj_mols['lig'], xt_file)
             write_mols_to_sdf(xhat_traj_mols['lig'], xhat_file)
             
-            write_arrays_to_pdb(xt_traj_mols['prot'], xt_file.with_suffix('.cif'))
-            write_arrays_to_pdb(xhat_traj_mols['prot'], xhat_file.with_suffix('.cif'))
+            if 'protein_identity' in task.groups_present or 'protein_structure' in task.groups_present:
+                write_arrays_to_cif(xt_traj_mols['prot'], xt_file.with_suffix('.cif'))
+                write_arrays_to_cif(xhat_traj_mols['prot'], xhat_file.with_suffix('.cif'))
     else:
         rdkit_mols = [ s.get_rdkit_ligand() for s in sampled_systems ]
         output_file = output_dir / f"{task_name}_samples.sdf"

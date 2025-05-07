@@ -68,6 +68,7 @@ class VectorField(nn.Module):
         self_conditioning: bool = False,
         use_dst_feats: bool = False,
         dst_feat_msg_reduction_factor: float = 4,
+        rebuild_edges: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -84,6 +85,7 @@ class VectorField(nn.Module):
         self.time_embedding_dim = time_embedding_dim
         self.self_conditioning = self_conditioning
         self.has_mask = has_mask
+        self.rebuild_edges = rebuild_edges
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -581,6 +583,9 @@ class VectorField(nn.Module):
                                 node_positions[ntype],
                                 node_vec_features[ntype],
                             )
+                            if self.rebuild_edges:
+                                g.nodes[ntype].data["x_t"] = node_positions[ntype]
+                                
                         if modality.graph_entity == "edge":
                             x_diff, d = self.precompute_distances(
                                 g, node_positions
@@ -595,6 +600,10 @@ class VectorField(nn.Module):
                                 d=d[etype],
                                 etype=etype,
                             )
+                    if self.rebuild_edges:
+                        g = remove_edges(g)
+                        g = build_edges(g, task_class, node_batch_idx, self.graph_config)
+                        x_diff, d = self.precompute_distances(g)
 
         logits = {}
         for modality in task_class.modalities_generated:
