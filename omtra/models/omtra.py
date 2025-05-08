@@ -45,6 +45,7 @@ from omtra.priors.sample import sample_priors
 from omtra.eval.register import get_eval
 from omtra.eval.utils import add_task_prefix
 
+# from line_profiler import profile
 
 class OMTRA(pl.LightningModule):
     def __init__(
@@ -160,8 +161,8 @@ class OMTRA(pl.LightningModule):
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
             current_checkpoints = list(checkpoint_dir.glob("*.ckpt"))
-            current_checkpoints.sort(key=lambda x: x.stem.split("_")[-1])
-            if len(current_checkpoints) >= self.k_checkpoints:
+            if self.global_rank == 0 and len(current_checkpoints) >= self.k_checkpoints:
+                current_checkpoints.sort(key=lambda x: int(x.stem.split("_")[-1]))
                 # remove the oldest checkpoint
                 oldest_checkpoint = current_checkpoints[0]
                 oldest_checkpoint.unlink()
@@ -197,6 +198,7 @@ class OMTRA(pl.LightningModule):
             else:
                 self.loss_fn_dict[modality.name] = nn.MSELoss(reduction=reduction)
 
+    # @profile
     def training_step(self, batch_data, batch_idx):
         g, task_name, dataset_name = batch_data
 
@@ -268,7 +270,7 @@ class OMTRA(pl.LightningModule):
 
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=2, n_timesteps=200, device=device)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         # TODO: compute evals and log them / do we want to log them separately for each task?
@@ -285,6 +287,7 @@ class OMTRA(pl.LightningModule):
         
         return 0.0
 
+    # @profile
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
         # sample time
         # TODO: what are time sampling methods used in other papers?
