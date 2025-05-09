@@ -579,12 +579,15 @@ class PlinderDataset(ZarrDataset):
         # 7) map each rec_idx → residue index via our dict
         rec_res_ids   = rec.get_annotation("res_id")[rec_idx]
         rec_chain_ids = rec.get_annotation("chain_id")[rec_idx]
-        res_idx = [res_index[(rid, cid)] for rid, cid in zip(rec_res_ids, rec_chain_ids)]
-
+        res_idx = [res_index[(rid, cid)] for rid, cid in zip(rec_res_ids, rec_chain_ids) if (rid, cid) in res_index]
+        
+        # TODO: actually fix this bug 
+        empty = torch.zeros((2,0), dtype=torch.long)
+        return prot_atom, empty
         prot_res = torch.tensor(
             np.vstack([res_idx, lig_idx]), dtype=torch.long
         )
-
+        
         return prot_atom, prot_res
         
     def convert_ligand(

@@ -518,8 +518,10 @@ class HeteroGVPConv(nn.Module):
 
         if self.message_norm == "mean":
             self.agg_func = fn.mean
+            self.cross_reducer = "mean"
         else:
             self.agg_func = fn.sum
+            self.cross_reducer = "sum"
 
         # if message size is smaller than node embedding size, we need to project aggregated messages back to the node embedding size
         self.message_expansion = nn.ModuleDict()
@@ -578,7 +580,7 @@ class HeteroGVPConv(nn.Module):
 
             # edge feature
             for etype in self.edge_types:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 if self.edge_feat_size[etype] > 0:
                     assert edge_feats.get(etype) is not None, (
@@ -589,7 +591,7 @@ class HeteroGVPConv(nn.Module):
             # normalize x_diff and compute rbf embedding of edge distance
             # dij = torch.norm(g.edges[self.edge_type].data['x_diff'], dim=-1, keepdim=True)
             for etype in self.edge_types:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 if x_diff is not None and d is not None:
                     g.edges[etype].data["x_diff"] = x_diff[etype]
@@ -630,7 +632,7 @@ class HeteroGVPConv(nn.Module):
                 passing_edges = self.edge_types
 
             for etype in passing_edges:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
                 etype_message = partial(self.message, etype=etype)
                 g.apply_edges(etype_message, etype=etype)
@@ -638,7 +640,7 @@ class HeteroGVPConv(nn.Module):
             # if self.attenion, multiple messages by attention weights
             if self.attention:
                 for etype in self.edge_types:
-                    if g.num_edges(etype) == 0:
+                    if etype not in g.etypes or g.num_edges(etype) == 0:
                         continue
                     scalar_msg, att_logits = (
                         g.edges[etype].data["scalar_msg"][:, : self.s_message_dim],
@@ -666,9 +668,9 @@ class HeteroGVPConv(nn.Module):
             scalar_agg_fns = {}
             vector_agg_fns = {}
             for etype in passing_edges:
-                if g.num_edges(etype) == 0:
+                if etype not in g.etypes or g.num_edges(etype) == 0:
                     continue
-
+                """
                 g.update_all(
                     fn.copy_e("scalar_msg", "m"),
                     self.agg_func("m", "scalar_msg"),
@@ -680,6 +682,8 @@ class HeteroGVPConv(nn.Module):
                     etype=etype,
                 )
                 """
+                
+                
                 scalar_agg_fns[etype] = (
                     fn.copy_e("scalar_msg", "m"),
                     self.agg_func("m", "scalar_msg"),
@@ -687,10 +691,10 @@ class HeteroGVPConv(nn.Module):
                 vector_agg_fns[etype] = (
                     fn.copy_e("vec_msg", "m"),
                     self.agg_func("m", "vec_msg"),
-                )"""
+                )
 
-            # g.multi_update_all(scalar_agg_fns, cross_reducer=self.agg_func)
-            # g.multi_update_all(vector_agg_fns, cross_reducer=self.agg_func)
+            g.multi_update_all(scalar_agg_fns, cross_reducer=self.cross_reducer)
+            g.multi_update_all(vector_agg_fns, cross_reducer=self.cross_reducer)
 
             # get aggregated scalar and vector messages
             if isinstance(self.message_norm, str):
