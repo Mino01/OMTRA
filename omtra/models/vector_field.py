@@ -710,7 +710,12 @@ class VectorField(nn.Module):
         if not etype:
             etypes = self.edge_types
         else:
-            etypes = [etype]
+            if isinstance(etype, str):
+                etypes = [etype]
+            elif isinstance(etype, list):
+                etypes = etype
+            else:
+                raise ValueError("etypes must be a string or a list of strings")
             
         with g.local_scope():
             for ntype in self.node_types:
