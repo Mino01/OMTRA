@@ -274,9 +274,15 @@ class OMTRA(pl.LightningModule):
             g_list = dgl.unbatch(g)
             n_replicates = 2
 
+        if 'ligand_identity' in task.groups_present and 'protein_identity' in task.groups_present:
+            coms = dgl.readout_nodes(g, feat='x_1_true', op='mean', ntype='lig')
+            coms = [ coms[i] for i in range(g.batch_size) ]
+        else:
+            coms = None
+
         self.eval()
         # TODO: n_replicates and n_timesteps should not be hard-coded
-        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device)
+        samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms)
         samples = [s.to("cpu") for s in samples if s is not None]
         
         # TODO: compute evals and log them / do we want to log them separately for each task?
