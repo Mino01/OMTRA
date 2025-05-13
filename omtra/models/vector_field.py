@@ -631,7 +631,7 @@ class VectorField(nn.Module):
                         g = remove_edges(g, lig_only=True)
                         g = build_edges(g, task_class, node_batch_idx, self.graph_config, lig_only=True)
                         edges_to_rebuild = [k for k in x_diff if 'lig' in k and k != 'lig_to_lig']
-                        x_diff_rebuilt, d_rebuilt = self.precompute_distances(g, node_positions, etypes=edges_to_rebuild)
+                        x_diff_rebuilt, d_rebuilt = self.precompute_distances(g, node_positions, etype=edges_to_rebuild)
                         x_diff.update(x_diff_rebuilt)
                         d.update(d_rebuilt)
 
@@ -710,7 +710,12 @@ class VectorField(nn.Module):
         if not etype:
             etypes = self.edge_types
         else:
-            etypes = [etype]
+            if isinstance(etype, str):
+                etypes = [etype]
+            elif isinstance(etype, list):
+                etypes = etype
+            else:
+                raise ValueError("etypes must be a string or a list of strings")
             
         with g.local_scope():
             for ntype in self.node_types:
