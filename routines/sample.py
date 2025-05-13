@@ -192,22 +192,13 @@ def main(args):
 
     if args.visualize:
         for i, sys in enumerate(sampled_systems):
-<<<<<<< HEAD
             prot = 'protein_identity' in task.groups_present
             xt_traj_mols = sys.build_traj(ep_traj=False, lig=True, prot=prot)
             xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True, prot=prot)
-            xt_file = output_dir / f"{task_name}_xt_traj_{i}.sdf"
-            xhat_file = output_dir / f"{task_name}_xhat_traj_{i}.sdf"
-            write_mols_to_sdf(xt_traj_mols['lig'], xt_file)
-            write_mols_to_sdf(xhat_traj_mols['lig'], xhat_file)
-=======
-            xt_traj_mols = sys.build_traj(ep_traj=False, lig=True, prot=True)
-            xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True, prot=True)
             lig_xt_file = output_dir / f"{task_name}_lig_xt_traj_{i}.sdf"
             lig_xhat_file = output_dir / f"{task_name}_lig_xhat_traj_{i}.sdf"
             write_mols_to_sdf(xt_traj_mols['lig'], lig_xt_file)
             write_mols_to_sdf(xhat_traj_mols['lig'], lig_xhat_file)
->>>>>>> prot_fixed_sampling
             
             if 'protein_identity' in task.groups_present or 'protein_structure' in task.groups_present:
                 prot_xt_file = output_dir / f"{task_name}_prot_xt_traj_{i}.cif"
