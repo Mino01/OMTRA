@@ -64,6 +64,7 @@ class OMTRA(pl.LightningModule):
         k_checkpoints: int = 20,
         checkpoint_interval: int = 1000,
         og_run_dir: Optional[str] = None,
+        fake_atom_p: float = 0.0,
     ):
         super().__init__()
 
@@ -77,6 +78,7 @@ class OMTRA(pl.LightningModule):
         self.optimizer_cfg = optimizer
         self.prior_config = prior_config
         self.og_run_dir = og_run_dir
+        self.fake_atom_p = fake_atom_p
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -124,6 +126,7 @@ class OMTRA(pl.LightningModule):
             td_coupling=self.td_coupling,
             interpolant_scheduler=self.interpolant_scheduler,
             graph_config=self.graph_config,
+            fake_atoms=self.fake_atom_p>0.0,
         )
 
         if not ligand_encoder.is_empty():
@@ -468,6 +471,8 @@ class OMTRA(pl.LightningModule):
         groups_fixed = task.groups_fixed
 
         # TODO: user-supplied n_atoms dict?
+        if self.fake_atom_p > 0.0:
+            raise NotImplementedError('sampling with fake atoms not implemented yet')
 
 
         if device is None and g_list is not None:
