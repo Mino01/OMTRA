@@ -343,6 +343,7 @@ class VectorField(nn.Module):
                 edge_embedding_dim=n_hidden_edge_feats,
                 rbf_dim=rbf_dim,
                 rbf_dmax=rbf_dmax,
+                fake_atoms=fake_atoms,
             )
 
     @g_local_scope

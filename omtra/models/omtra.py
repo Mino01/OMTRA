@@ -471,8 +471,6 @@ class OMTRA(pl.LightningModule):
         groups_fixed = task.groups_fixed
 
         # TODO: user-supplied n_atoms dict?
-        if self.fake_atom_p > 0.0:
-            raise NotImplementedError('sampling with fake atoms not implemented yet')
 
 
         if device is None and g_list is not None:
@@ -553,6 +551,14 @@ class OMTRA(pl.LightningModule):
             # in this case, the distrbution could come from pharmit or plinder dataset..user-chosen option?
 
         if add_ligand:
+
+            if self.fake_atom_p > 0.0:
+                n_real_atoms = n_lig_atoms
+                max_num_fake_atoms = torch.ceil(n_real_atoms*self.fake_atom_p).float()
+                frac = torch.rand_like(max_num_fake_atoms)
+                num_fake_atoms = torch.floor(frac*(max_num_fake_atoms+1)).long()
+                n_real_atoms = n_real_atoms + num_fake_atoms
+
             for g_idx, g_i in enumerate(g_flat):
                 # clear ligand nodes (and edges) if they exist
                 if g_i.num_nodes("lig") > 0:
@@ -686,6 +692,7 @@ class OMTRA(pl.LightningModule):
                 ss_kwargs = dict()
             sampled_system = SampledSystem(
                 g=g_i,
+                fake_atoms=self.fake_atom_p>0.0,
                 **ss_kwargs,
             )
             sampled_systems.append(sampled_system)

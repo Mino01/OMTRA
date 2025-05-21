@@ -551,6 +551,7 @@ class SampledSystem:
 
         n_frames = self.traj[test_key].shape[0]
         if lig:
+            # TODO: this was so that we can align trajectory frames to the last frame, need to do this
             lig_x_final = self.traj["lig_x"][-1]
 
         traj_mols = defaultdict(list)
