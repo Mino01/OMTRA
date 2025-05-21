@@ -21,7 +21,7 @@ num_workers: 2
 max_steps: 1000 # number of steps to train for
 fake_atom_p: 0.0 # upper bound on fraction of fake atoms added to a molecule
 
-pharmit_path: ${omtra_root:}/data/pharmit_dev
+pharmit_path: ${omtra_root:}/data/pharmit
 plinder_path: ${omtra_root:}/data/plinder
 
 
