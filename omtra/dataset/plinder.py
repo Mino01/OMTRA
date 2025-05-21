@@ -991,6 +991,11 @@ class PlinderDataset(ZarrDataset):
 
             node_counts.append(counts)
 
+        if self.fake_atom_p > 0:
+            lig_node_counts = node_counts[0]
+            mean_fake_atoms = self.fake_atom_p/2 * lig_node_counts
+            node_counts[0] = lig_node_counts + mean_fake_atoms.astype(int)
+
         if per_ntype:
             num_nodes_dict = {
                 ntype: ncount for ntype, ncount in zip(node_types, node_counts)

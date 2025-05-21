@@ -191,7 +191,11 @@ class PharmitDataset(ZarrDataset):
         node_counts = []
         for ntype in node_types:
             graph_lookup = self.slice_array(f'{ntype}/node/graph_lookup', start_idx, end_idx)
-            node_counts.append(graph_lookup[:, 1] - graph_lookup[:, 0])
+            ntype_node_counts = graph_lookup[:, 1] - graph_lookup[:, 0]
+            if ntype == 'lig' and self.use_fake_atoms:
+                mean_fake_atoms = self.fake_atom_p/2 * ntype_node_counts
+                ntype_node_counts = ntype_node_counts + mean_fake_atoms.astype(int)
+            node_counts.append(ntype_node_counts)
 
         if per_ntype:
             num_nodes_dict = {ntype: ncount for ntype, ncount in zip(node_types, node_counts)}
