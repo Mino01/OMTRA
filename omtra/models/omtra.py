@@ -461,6 +461,7 @@ class OMTRA(pl.LightningModule):
         n_timesteps: int = None,
         device: Optional[torch.device] = None,
         visualize=False,
+        extract_latents_for_confidence=False,
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
         groups_generated = task.groups_generated
@@ -650,7 +651,7 @@ class OMTRA(pl.LightningModule):
         # the only reason i'm allowing it to be none by default and manually adding it in
         # is that i don't want to define a default number of timesteps in more than one palce
         # it is already defined as default arg to VectorField.integrate
-        itg_kwargs = dict(visualize=visualize)
+        itg_kwargs = dict(visualize=visualize, extract_latents_for_confidence=extract_latents_for_confidence)
         if n_timesteps is not None:
             itg_kwargs["n_timesteps"] = n_timesteps
 
@@ -662,7 +663,15 @@ class OMTRA(pl.LightningModule):
             **itg_kwargs
         )
 
-        if visualize:
+        if extract_latents_for_confidence:
+            g, per_graph_traj_or_latents = itg_result 
+            
+            if visualize:
+                per_graph_traj = per_graph_traj_or_latents['traj']
+                all_extracted_latents = per_graph_traj_or_latents['latents']
+            else:
+                all_extracted_latents = per_graph_traj_or_latents # if not visualizing, it will be just latents
+        elif visualize:
             g, per_graph_traj = itg_result
         else:
             g = itg_result
@@ -684,4 +693,8 @@ class OMTRA(pl.LightningModule):
                 **ss_kwargs,
             )
             sampled_systems.append(sampled_system)
-        return sampled_systems
+        
+        if extract_latents_for_confidence:
+            return sampled_systems, all_extracted_latents 
+        else:
+            return sampled_systems
