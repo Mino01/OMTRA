@@ -301,7 +301,7 @@ class LigandVQVAE(pl.LightningModule):
                  c_embed_dim=8,
                  e_embed_dim=8,
                  rbf_dim=32,
-                 rbf_dmax=10,
+                 rbf_dmax=10,                 
                  mask_prob=0.10,
                  k_checkpoints: int = 20,
                  checkpoint_interval: int = 1000,
@@ -323,6 +323,7 @@ class LigandVQVAE(pl.LightningModule):
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
         self.mask_prob = mask_prob
+
 
         self.atom_type_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(lig_atom_type_map))
         self.atom_charge_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(charge_map))
@@ -419,19 +420,17 @@ class LigandVQVAE(pl.LightningModule):
 
         pred_bond_orders = torch.argmax(bond_order_logits, dim=1)
         self.bond_order_accuracy.update(pred_bond_orders, target_bond_orders)
-
-
-        # recon_loss = atom_type_loss + atom_charge_loss + bond_order_loss
         
-        metrics = {'vq+comittment_loss': loss,
+        losses = {'vq+comittment_loss': loss,
                   'a_recon_loss': atom_type_loss,
                   'c_recon_loss': atom_charge_loss,
                   'e_recon_loss': bond_order_loss,
                   'a_accuracy': self.atom_type_accuracy.compute(),
                   'c_accuracy': self.atom_charge_accuracy.compute(),
-                  'e_accuracy': self.bond_order_accuracy.compute()}
+                  'e_accuracy': self.bond_order_accuracy.compute(),
+                  'perplexity': perplexity}
 
-        return metrics, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity
+        return losses
     
 
     def training_step(self, batch, batch_idx):
@@ -439,23 +438,51 @@ class LigandVQVAE(pl.LightningModule):
 
         self.manual_checkpoint(batch_idx)
         
-        metrics, atom_type_logits, atom_charge_logits, bond_order_logits, perplexity = self.forward(g)
+        losses = self.forward(g)
 
         train_log_dict = {}
-        for key, metric in metrics.items():
+        for key, metric in losses.items():
             train_log_dict[f"{key}_train"] = metric
 
         total_loss = torch.zeros(1, device=g.device, requires_grad=True)
-        for loss_name, loss_val in metrics.items():
+        for loss_name, loss_val in losses.items():
             if 'loss' in loss_name:
                 total_loss = total_loss + 1.0 * loss_val
 
         self.log_dict(train_log_dict, sync_dist=True)
         self.log("train_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True)
-        self.log("perplexity", perplexity, prog_bar=True, sync_dist=True, on_step=True)
+        #self.log("train_perplexity",train_log_dict['perplexity_train'], prog_bar=True, sync_dist=True, on_step=True)
         
         return total_loss
     
+
+    def validation_step(self, batch, batch_idx):
+        g, task_name, dataset_name = batch
+
+        self.manual_checkpoint(batch_idx)
+
+        tmp_mask_prob = self.mask_prob
+        self.mask_prob = 0
+        
+        losses = self.forward(g)
+
+        self.mask_prob = tmp_mask_prob
+
+        val_log_dict = {}
+        for key, metric in losses.items():
+            val_log_dict[f"{key}_val"] = metric
+
+        total_loss = torch.zeros(1, device=g.device, requires_grad=False)
+        for loss_name, loss_val in losses.items():
+            if 'loss' in loss_name:
+                total_loss = total_loss + 1.0 * loss_val
+
+        self.log_dict(val_log_dict, sync_dist=True, batch_size=g.batch_size)
+        self.log("val_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True, batch_size=g.batch_size)
+        #self.log("val_perplexity",val_log_dict['perplexity_val'], prog_bar=True, sync_dist=True, on_step=True, batch_size=g.batch_size)
+
+        return total_loss
+
 
     def configure_optimizers(self, lr=1e-4):
         optimizer = optim.Adam(self.parameters(), lr=lr)
