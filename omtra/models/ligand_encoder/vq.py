@@ -12,6 +12,7 @@ from omtra.data.graph.utils import get_upper_edge_mask
 import pytorch_lightning as pl
 import hydra
 from pathlib import Path
+from typing import Optional
     
 
 
@@ -325,12 +326,14 @@ class LigandVQVAE(pl.LightningModule):
                  checkpoint_interval: int = 1000,
                  use_ema=True,
                  decay=0.99,
-                 epsilon=1e-5,):
+                 epsilon=1e-5,
+                 og_run_dir: Optional[str] = None,):
                  
         super().__init__()
 
         self.k_checkpoints: int = k_checkpoints
         self.checkpoint_interval: int = checkpoint_interval
+        self.og_run_dir = og_run_dir
 
         self.mask_prob = mask_prob
         self.n_mask_feats = int(mask_prob > 0)  # Number of masked features (atom types and charges)
