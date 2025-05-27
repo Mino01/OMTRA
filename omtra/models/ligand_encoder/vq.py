@@ -63,14 +63,19 @@ class Encoder(nn.Module):
                                  nn.Linear(latent_dim*2, latent_dim))
         
 
-    def forward(self, g):
+    def forward(self, g, mask_prob=None):
 
         atom_types = g.nodes['lig'].data['a_1_true'].clone()    # Atom types, has shape (n_nodes,)
         atom_charges = g.nodes['lig'].data['c_1_true'].clone()  # Atom charges, has shape (n_nodes,)
         bond_orders = g.edges['lig_to_lig'].data['e_1_true']  # Bond orders, has shape (n_edges,)
 
         # apply random masking
-        mask = torch.rand_like(atom_types.float()) < self.mask_prob   # Binary mask
+        if mask_prob is None:
+            mask_prob = self.mask_prob
+        else:
+            mask_prob = mask_prob
+
+        mask = torch.rand_like(atom_types.float()) < mask_prob   # Binary mask
         atom_types[mask] = len(lig_atom_type_map)  # Set masked atom types to the last index (masked atom type)
         atom_charges[mask] = len(charge_map)  # Set masked atom charges to the last index (masked atom charge)
 
@@ -228,7 +233,8 @@ class Decoder(nn.Module):
     def __init__(self, 
                  latent_dim, 
                  num_decod_hiddens, 
-                 num_bond_decod_hiddens, 
+                 num_bond_decod_hiddens,
+                 num_hidden_layers, 
                  rbf_dmax=10,
                  rbf_dim=32,
                  ):
@@ -240,19 +246,30 @@ class Decoder(nn.Module):
         self.rbf_dmax = rbf_dmax
         self.rbf_dim = rbf_dim
 
-        # Use nn.Sequential to define the entire model
-        self.atom_decoder = nn.Sequential(
-            nn.Linear(latent_dim, num_decod_hiddens),
-            nn.ReLU(),
-            nn.Linear(num_decod_hiddens, self.n_atom_types + self.n_atom_charges),
-        )
+
+        # Atom type and charge decoder
+        atom_layers = [nn.Linear(latent_dim, num_decod_hiddens),   # Initial layer
+                       nn.ReLU()]    
+
+        for _ in range(num_hidden_layers-1):    # Hidden layers
+            atom_layers.append(nn.Linear(num_decod_hiddens, num_decod_hiddens))
+            atom_layers.append(nn.ReLU())
+
+        atom_layers.append(nn.Linear(num_decod_hiddens, self.n_atom_types + self.n_atom_charges))   # Final layer
+        self.atom_decoder = nn.Sequential(*atom_layers) # Use nn.Sequential to define the entire model
+
+
         
-        # Use nn.Sequential to define the entire model
-        self.bond_decoder = nn.Sequential(
-            nn.Linear(latent_dim+rbf_dim, num_bond_decod_hiddens),
-            nn.ReLU(),
-            nn.Linear(num_bond_decod_hiddens, self.n_bond_orders),
-        )
+        # Bond order decoder
+        bond_layers = [nn.Linear(latent_dim+rbf_dim, num_bond_decod_hiddens),   # Initial layer
+                       nn.ReLU()]    
+
+        for _ in range(num_hidden_layers-1):    # Hidden layers
+            bond_layers.append(nn.Linear(num_bond_decod_hiddens, num_bond_decod_hiddens))
+            bond_layers.append(nn.ReLU())
+
+        bond_layers.append(nn.Linear(num_bond_decod_hiddens, self.n_bond_orders))   # Final layer
+        self.bond_decoder = nn.Sequential(*bond_layers) # Use nn.Sequential to define the entire model
 
     
 
@@ -295,7 +312,8 @@ class LigandVQVAE(pl.LightningModule):
                  latent_dim, # size of latent atom types
                  num_embeddings, # size of the codebook
                  num_decod_hiddens, 
-                 num_bond_decod_hiddens, 
+                 num_bond_decod_hiddens,
+                 num_hidden_layers, 
                  commitment_cost,
                  a_embed_dim=16,
                  c_embed_dim=8,
@@ -328,6 +346,7 @@ class LigandVQVAE(pl.LightningModule):
         self.atom_type_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(lig_atom_type_map))
         self.atom_charge_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(charge_map))
         self.bond_order_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
+        self.nonzero_bond_order_accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=len(bond_type_map))
         
         self.encoder = Encoder(
                                scalar_size=scalar_size, 
@@ -356,6 +375,7 @@ class LigandVQVAE(pl.LightningModule):
         self.decoder = Decoder(latent_dim = latent_dim,
                             num_decod_hiddens = num_decod_hiddens,
                             num_bond_decod_hiddens = num_bond_decod_hiddens,
+                            num_hidden_layers = num_hidden_layers,
                             rbf_dim=self.rbf_dim,
                             rbf_dmax=self.rbf_dmax
                             )
@@ -391,7 +411,7 @@ class LigandVQVAE(pl.LightningModule):
         self.bond_order_loss_fn = torch.nn.CrossEntropyLoss()
 
 
-    def forward(self, g: dgl.DGLHeteroGraph): 
+    def forward(self, g: dgl.DGLHeteroGraph, mask_prob=None): 
         """ Get relevant features from batched graph """
 
         target_atom_types = g.nodes['lig'].data['a_1_true']  # (n_nodes,)
@@ -401,7 +421,7 @@ class LigandVQVAE(pl.LightningModule):
 
 
         """ Pass to VQ-VAE model """
-        z_e = self.encoder(g)   # Encoding
+        z_e = self.encoder(g, mask_prob=mask_prob)   # Encoding
 
         loss, z_d, perplexity = self.vq_vae(z_e)    # Vector Quantization
         
@@ -420,6 +440,10 @@ class LigandVQVAE(pl.LightningModule):
 
         pred_bond_orders = torch.argmax(bond_order_logits, dim=1)
         self.bond_order_accuracy.update(pred_bond_orders, target_bond_orders)
+
+        nonzero_indices = torch.nonzero(target_bond_orders != 0, as_tuple=True)[0]
+        self.nonzero_bond_order_accuracy.update(pred_bond_orders[nonzero_indices], target_bond_orders[nonzero_indices])
+
         
         losses = {'vq+comittment_loss': loss,
                   'a_recon_loss': atom_type_loss,
@@ -428,6 +452,7 @@ class LigandVQVAE(pl.LightningModule):
                   'a_accuracy': self.atom_type_accuracy.compute(),
                   'c_accuracy': self.atom_charge_accuracy.compute(),
                   'e_accuracy': self.bond_order_accuracy.compute(),
+                  'e_non_zero_accuracy': self.nonzero_bond_order_accuracy.compute(),
                   'perplexity': perplexity}
 
         return losses
@@ -451,8 +476,7 @@ class LigandVQVAE(pl.LightningModule):
 
         self.log_dict(train_log_dict, sync_dist=True)
         self.log("train_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True)
-        #self.log("train_perplexity",train_log_dict['perplexity_train'], prog_bar=True, sync_dist=True, on_step=True)
-        
+
         return total_loss
     
 
@@ -460,26 +484,20 @@ class LigandVQVAE(pl.LightningModule):
         g, task_name, dataset_name = batch
 
         self.manual_checkpoint(batch_idx)
-
-        tmp_mask_prob = self.mask_prob
-        self.mask_prob = 0
-        
-        losses = self.forward(g)
-
-        self.mask_prob = tmp_mask_prob
+    
+        losses = self.forward(g, mask_prob=0.0)
 
         val_log_dict = {}
         for key, metric in losses.items():
             val_log_dict[f"{key}_val"] = metric
 
-        total_loss = torch.zeros(1, device=g.device, requires_grad=False)
+        total_loss = torch.zeros(1, device=g.device)
         for loss_name, loss_val in losses.items():
             if 'loss' in loss_name:
                 total_loss = total_loss + 1.0 * loss_val
 
         self.log_dict(val_log_dict, sync_dist=True, batch_size=g.batch_size)
         self.log("val_total_loss", total_loss, prog_bar=True, sync_dist=True, on_step=True, batch_size=g.batch_size)
-        #self.log("val_perplexity",val_log_dict['perplexity_val'], prog_bar=True, sync_dist=True, on_step=True, batch_size=g.batch_size)
 
         return total_loss
 
