@@ -451,6 +451,11 @@ class SampledSystem:
         ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol)
         rdkit_mol = self.build_molecule(*ligdata)
         return rdkit_mol
+    
+    def get_rdkit_ref_ligand(self) -> Union[None, Chem.Mol]:
+        ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol, ref=True)
+        rdkit_mol = self.build_molecule(*ligdata)
+        return rdkit_mol
 
     def convert_ligdata_to_biotite(
         self,
@@ -497,6 +502,7 @@ class SampledSystem:
         ctmc_mol: bool = False,
         show_fake_atoms: bool = False,
         npnde: bool = False,
+        ref: bool = False
     ):
         if g is None:
             g = self.g
@@ -525,10 +531,10 @@ class SampledSystem:
             lig_g.remove_nodes(fake_atom_idxs)
 
         # extract node-level features
-        positions = lig_g.ndata["x_1"]
-
-        # extract node-level features
-        positions = lig_g.ndata["x_1"]
+        if ref:
+            positions = lig_g.ndata["x_1_true"].clone()
+        else:
+            positions = lig_g.ndata["x_1"]
         atom_types = lig_g.ndata["a_1"]
         atom_types = [atom_type_map[int(atom)] for atom in atom_types]
 

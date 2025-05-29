@@ -5,6 +5,9 @@ from omtra.eval.utils import (
     reos_and_rings,
     compute_peppr_metrics_no_ref,
     compute_peppr_metrics_ref,
+    bust_dock,
+    bust_mol,
+    bust_redock
 )
 from omtra.data.graph.utils import SampledSystem
 from typing import Dict, Any, Optional, List
@@ -18,6 +21,7 @@ def denovo_ligand(sampled_systems: List[SampledSystem]):
     metrics = compute_validity(sampled_systems)
     metrics.update(compute_stability(sampled_systems))
     metrics.update(reos_and_rings(sampled_systems))
+    metrics.update(bust_mol(sampled_systems))
     return metrics
 
 
@@ -28,6 +32,7 @@ def ligand_conformer(sampled_systems: List[SampledSystem]):
     # metrics.update(reos_and_rings(sampled_systems))
     # TODO: metrics for ligand conformer? just clashes? strain energy?
     metrics = {}
+    metrics.update(bust_mol(sampled_systems))
     return metrics
 
 
@@ -68,6 +73,7 @@ def protein_ligand_denovo(sampled_systems: List[SampledSystem]):
 
     # TODO: add system level metrics
     metrics.update(compute_peppr_metrics_no_ref(sampled_systems))
+    metrics.update(bust_dock(sampled_systems))
     return metrics
 
 
@@ -77,6 +83,7 @@ def protein_ligand_denovo(sampled_systems: List[SampledSystem]):
 @register_eval("rigid_docking")
 def flexible_docking(sampled_systems: List[SampledSystem]):
     metrics = compute_peppr_metrics_ref(sampled_systems)
+    metrics.update(bust_redock(sampled_systems))
     return metrics
 
 
