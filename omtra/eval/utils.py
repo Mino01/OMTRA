@@ -294,7 +294,7 @@ def bust_redock(sampled_systems: List[SampledSystem]):
         except:
             continue
         for metric in metrics_to_log:
-            value = res.iloc[0][metric]
+            value = res.iloc[0][metric] if metric in res.columns else None
             if not pd.isna(value):
                 collected_values[metric].append(value)
     metrics = {
@@ -317,7 +317,7 @@ def bust_dock(sampled_systems: List[SampledSystem]):
         except:
             continue
         for metric in metrics_to_log:
-            value = res.iloc[0][metric]
+            value = res.iloc[0][metric] if metric in res.columns else None
             if not pd.isna(value):
                 collected_values[metric].append(value)
     metrics = {
