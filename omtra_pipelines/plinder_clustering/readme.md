@@ -41,4 +41,8 @@ python scripts/merge_fps.py fps/pred/blocks fps/pred/clusters.npz
 ```console
 python scripts/add_clusters_to_zarr.py /home/ian/projects/mol_diffusion/OMTRA/data/plinder/no_links/train.zarr fps/no_links/clusters.npz
 ```
-4. 
+
+# TODO:
+- [ ] once cluster assignments are in zarr store, plinder dataset class must compute p_skip and hand over to chunk tracker
+- [ ] parameter for controlling how close to uniform sampling over clusters
+- [ ] measure how many things are skipped by the weighted sampling
