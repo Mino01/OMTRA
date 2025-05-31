@@ -70,6 +70,7 @@ class VectorField(nn.Module):
         use_dst_feats: bool = False,
         dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
+        fake_atoms: bool = False,
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -87,6 +88,7 @@ class VectorField(nn.Module):
         self.self_conditioning = self_conditioning
         self.has_mask = has_mask
         self.rebuild_edges = rebuild_edges
+        self.fake_atoms = fake_atoms
 
         self.convs_per_update = convs_per_update
         self.n_molecule_updates = n_molecule_updates
@@ -114,11 +116,11 @@ class VectorField(nn.Module):
         modality_present_space = set()
         modality_generated_space = set()
         for task_class in task_classes:
-            for modality in task_class.modalities_fixed:
-                modality_present_space.add(modality.name)
-            for modality in task_class.modalities_generated:
-                modality_present_space.add(modality.name)
-                modality_generated_space.add(modality.name)
+            for m in task_class.modalities_fixed:
+                modality_present_space.add(m.name)
+            for m in task_class.modalities_generated:
+                modality_present_space.add(m.name)
+                modality_generated_space.add(m.name)
 
         modality_present_space = sorted(list(modality_present_space))
         modality_generated_space = sorted(list(modality_generated_space))
@@ -139,26 +141,26 @@ class VectorField(nn.Module):
 
         # create token embeddings for all categorical features that we are modeling
         for m in modalities_present_cls:
-            needs_token_embed = m.n_categories is not None and m.n_categories > 0
-            if not needs_token_embed:
+            if not m.is_categorical:
                 continue
             # if the modality is being generated, there is an extra mask token
             is_generated = m.name in modality_generated_space
+            has_fake_atoms = (m.name == 'lig_a') and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
             self.token_embeddings[m.name] = nn.Embedding(
-                m.n_categories + int(is_generated), token_dim
+                m.n_categories + int(is_generated) + int(has_fake_atoms), token_dim
             )
             # record the number of categorical features for each node type, not sure why, keeping tyler's code in place
             if m.graph_entity == "node":
                 self.ntype_cat_feats[m.entity_name] += 1
 
         # record modalities that are on edges
-        for modality in modalities_present_cls:
-            if modality.graph_entity != "edge":
+        for m in modalities_present_cls:
+            if m.graph_entity != "edge":
                 continue
-            if not modality.is_categorical:
+            if not m.is_categorical:
                 raise ValueError("did not expect continuous edge features")
-            self.edge_feat_sizes[modality.entity_name] = n_hidden_edge_feats
-            self.edge_types.add(modality.entity_name)
+            self.edge_feat_sizes[m.entity_name] = n_hidden_edge_feats
+            self.edge_types.add(m.entity_name)
 
         # get all edge types that we need to support
         # self.edge_types = set()
@@ -247,13 +249,13 @@ class VectorField(nn.Module):
             n_updaters = 1
 
         # for every modality being generated that is a node position, create NodePositionUpdate layers
-        for modality in modalities_generated_cls:
+        for m in modalities_generated_cls:
             is_node_position = (
-                modality.graph_entity == "node" and modality.data_key == "x"
+                m.graph_entity == "node" and m.data_key == "x"
             )
             if not is_node_position:
                 continue
-            ntype = modality.entity_name
+            ntype = m.entity_name
             self.node_position_updaters[ntype] = nn.ModuleList()
             for _ in range(n_updaters):
                 self.node_position_updaters[ntype].append(
@@ -266,10 +268,10 @@ class VectorField(nn.Module):
                 )
 
         # for every edge modality being generated, create EdgeUpdate layers
-        for modality in modalities_present_cls:
-            if modality.graph_entity != "edge":
+        for m in modalities_present_cls:
+            if m.graph_entity != "edge":
                 continue
-            etype = modality.entity_name
+            etype = m.entity_name
             if self.edge_feat_sizes[etype] == 0:
                 # skip edges without edge features, although i don't think we shouuld
                 # have edge features being generated that are empty
@@ -290,30 +292,31 @@ class VectorField(nn.Module):
         # we could only support node position updates via a node_output_head...TBD
         self.node_output_heads = nn.ModuleDict()
         # loop over modalities on nodes that are being generated
-        for modality in modalities_generated_cls:
-            is_node = modality.graph_entity == "node"
+        for m in modalities_generated_cls:
+            is_node = m.graph_entity == "node"
             if not is_node:
                 continue
             # if categorical, the output head is just a MLP on node scalar features
-            if modality.is_categorical:
-                self.node_output_heads[modality.name] = nn.Sequential(
+            if m.is_categorical:
+                has_fake_atoms = m.name == 'lig_a' and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
+                self.node_output_heads[m.name] = nn.Sequential(
                     nn.Linear(n_hidden_scalars, n_hidden_scalars),
                     nn.SiLU(),
-                    nn.Linear(n_hidden_scalars, modality.n_categories),
+                    nn.Linear(n_hidden_scalars, m.n_categories+int(has_fake_atoms)),
                 )
-            elif modality.data_key == "v":  # if a node vector feature
+            elif m.data_key == "v":  # if a node vector feature
                 # TODO: hard-coded assumption that this situation only applies to pharm
                 # vector features, need to make this more general
                 # also need to avoid hard-coding number of vec features out
                 # also maybe this should be a 2-layer GVP instead of a 1-layer GVP
-                self.node_output_heads[modality.name] = GVP(
+                self.node_output_heads[m.name] = GVP(
                     dim_feats_in=n_hidden_scalars,
                     dim_vectors_in=n_vec_channels,
                     dim_feats_out=4,
                     dim_vectors_out=4,
                 )
             elif (
-                modality.data_key == "x"
+                m.data_key == "x"
             ):  # if a node position, we don't need to do anything to it
                 continue
             else:
@@ -321,15 +324,14 @@ class VectorField(nn.Module):
 
         self.edge_output_heads = nn.ModuleDict()
         # need output head for edge types that we will predict bond order on
-        for modality in modalities_generated_cls:
-            is_edge_feat = modality.graph_entity == "edge"
-            is_categorical = modality.n_categories and modality.n_categories > 0
-            if not (is_edge_feat and is_categorical):
+        for m in modalities_generated_cls:
+            is_edge_feat = m.graph_entity == "edge"
+            if not (is_edge_feat and m.is_categorical):
                 continue
-            self.edge_output_heads[modality.name] = nn.Sequential(
+            self.edge_output_heads[m.name] = nn.Sequential(
                 nn.Linear(n_hidden_edge_feats, n_hidden_edge_feats),
                 nn.SiLU(),
-                nn.Linear(n_hidden_edge_feats, modality.n_categories),
+                nn.Linear(n_hidden_edge_feats, m.n_categories),
             )
 
         if self.self_conditioning:
@@ -341,6 +343,7 @@ class VectorField(nn.Module):
                 edge_embedding_dim=n_hidden_edge_feats,
                 rbf_dim=rbf_dim,
                 rbf_dmax=rbf_dmax,
+                fake_atoms=fake_atoms,
             )
 
     @g_local_scope

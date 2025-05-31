@@ -16,7 +16,7 @@ from omtra.constants import (
 )
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders, approx_n_edges
-from omtra.data.xace_ligand import sparse_to_dense, add_k_hop_edges
+from omtra.data.xace_ligand import add_k_hop_edges, MolXACE, add_fake_atoms
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
@@ -56,6 +56,7 @@ class PlinderDataset(ZarrDataset):
         processed_data_dir: str,
         graph_config: Optional[DictConfig] = None,
         prior_config: Optional[DictConfig] = None,
+        fake_atom_p: float = 0.0
     ):
         super().__init__(
             split,
@@ -67,6 +68,7 @@ class PlinderDataset(ZarrDataset):
         self.link_version = link_version
         self.graph_config = graph_config
         self.prior_config = prior_config
+        self.fake_atom_p = fake_atom_p
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
         self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
@@ -76,6 +78,7 @@ class PlinderDataset(ZarrDataset):
         }
         self.encode_residue = {res: i for i, res in enumerate(residue_map)}
         self.encode_atom = {atom: i for i, atom in enumerate(protein_atom_map)}
+        self.charge_map_tensor = torch.tensor(charge_map)
 
     @classproperty
     def name(cls):
@@ -499,15 +502,7 @@ class PlinderDataset(ZarrDataset):
         return node_data, edge_idxs, edge_data, pocket_mask, backbone_pocket_mask
 
     def encode_charges(self, charges: torch.Tensor) -> torch.Tensor:
-        charge_type_map = {charge: i for i, charge in enumerate(charge_map)}
-        encoded_charges = []
-        for charge in charges:
-            charge = int(charge.item())
-            if charge not in charge_type_map:
-                raise ValueError(f"{charge} not in charge map")
-            else:
-                encoded_charges.append(charge_type_map[charge])
-        return torch.Tensor(encoded_charges).long()
+        return torch.searchsorted(self.charge_map_tensor, charges)
     
     def infer_covalent_bonds(
         self,
@@ -600,38 +595,29 @@ class PlinderDataset(ZarrDataset):
         Dict[str, torch.Tensor],
         Dict[str, Dict[str, torch.Tensor]],
     ]:
-        coords = torch.from_numpy(ligand.coords).float()
-        atom_types = torch.from_numpy(ligand.atom_types).long()
-        atom_charges = torch.from_numpy(ligand.atom_charges).long()
 
-        if ligand.bond_types is not None and ligand.bond_indices is not None:
-            bond_types = torch.from_numpy(ligand.bond_types).long()
-            bond_indices = torch.from_numpy(ligand.bond_indices).long()
-        else:
-            bond_types = torch.zeros((0,), dtype=torch.long)
-            bond_indices = torch.zeros((2, 0), dtype=torch.long)
+        lig_xace = ligand.to_xace_mol(dense=True)
 
-        lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = sparse_to_dense(
-            coords, atom_types, atom_charges, bond_types, bond_indices
-        )
+        if self.fake_atom_p > 0:
+            lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
 
-        lig_c = self.encode_charges(lig_c)
+        lig_c = self.encode_charges(lig_xace.c)
         node_data = {
             "lig": {
-                "x_1_true": lig_x,
-                "a_1_true": lig_a,
+                "x_1_true": lig_xace.x,
+                "a_1_true": lig_xace.a,
                 "c_1_true": lig_c,
             }
         }
 
         edge_data = {
             "lig_to_lig": {
-                "e_1_true": lig_e,
+                "e_1_true": lig_xace.e,
             }
         }
 
         edge_idxs = {
-            "lig_to_lig": lig_edge_idxs,
+            "lig_to_lig": lig_xace.edge_idxs,
         }
         if ligand.is_covalent and ligand.linkages and pocket is not None:
             prot_atom_to_lig_tensor, prot_res_to_lig_tensor = self.infer_covalent_bonds(
@@ -1004,6 +990,11 @@ class PlinderDataset(ZarrDataset):
                 )
 
             node_counts.append(counts)
+
+        if self.fake_atom_p > 0:
+            lig_node_counts = node_counts[0]
+            mean_fake_atoms = self.fake_atom_p/2 * lig_node_counts
+            node_counts[0] = lig_node_counts + mean_fake_atoms.astype(int)
 
         if per_ntype:
             num_nodes_dict = {
