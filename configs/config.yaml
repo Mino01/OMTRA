@@ -1,34 +1,4 @@
-defaults:
-  - _self_
-  - model: default
-  - ligand_encoder: none
-  - trainer: default
-  - task_group: protein
-  - graph: default
-  - prior: default
-  - callbacks: no_checkpoint
-  - wandb_conf: default
-
-mode: omtra # mode for training, can be omtra (train omtra) or ligand_encoder (train just the ligand encoder)
-
-seed: 42
-
-name: i_forgot_to_name_my_run
-
-# global overrides
-edges_per_batch: 300000 # TODO: it might be the case the pharmit and plinder tasks support different batch sizes..
-num_workers: 2
-max_steps: 1000 # number of steps to train for
-
-pharmit_path: ${omtra_root:}/data/pharmit
-plinder_path: ${omtra_root:}/data/plinder
-
-
-# this is a directory that will symlink wandb 
-# run names and run ids to the actual hydra output directory
-symlink_dir: ./wandb_symlinks
-
-hydra:
-  run:
-    # make the timestap use milliseconds
-    dir: ./outputs/${now:%Y-%m-%d}/${name}_${now:%Y-%m-%d_%H-%M-%f}
+  File "/home/ian/projects/mol_diffusion/OMTRA/omtra_pipelines/plinder_clustering/generate_pairwise_cmds.py", line 33
+      for f1, f2 in itertools.combinations_with_replacement(files, 2):
+  ...
+      print(f"Generated {args.bash_file} with {len(files)*(len(files)+1)//2} commands.")
