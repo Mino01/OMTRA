@@ -45,7 +45,23 @@ chmod +x build_env.sh
 - [ ] aux losses; interaction loss
 - [ ] gaussian smoothing on top of apo structures
 
-# Useful things
+# Essetial things
+
+## Is there a pre-trained checkpoint you recommend I work with?
+
+Yes and you should remind me to write them down here.
+
+## Where is the data on the cluster? How do I tell omtra where the datasets are?
+
+### If using `routines/trian.py`
+
+By default, the script will look in `data/pharmit` and `data/plinder` (paths relative to your omtra repository), for the pharmit and plinder datasets, respectively. Now these datasets are big and moving them around is difficult and we don't want to have too many duplciates floating around. You should point your script to an existing copy of the dataset. Currently, you can use these on the CSB cluster:
+
+
+```console
+plinder_path=/net/galaxy/home/koes/tjkatz/OMTRA/data/plinder
+pharmit_path=/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit
+```
 
 ## How do I sample a trained model?
 
