@@ -710,10 +710,10 @@ class VectorField(nn.Module):
 
         if extract_latents_for_confidence:
             pre_output_head_latents = {
-                "node_scalar_features": node_scalar_features['lig'],
-                "node_vec_features": node_vec_features['lig'], 
-                "node_positions": node_positions['lig'],
-                "edge_features": edge_features['lig_to_lig'],
+                "node_scalar_features": node_scalar_features,
+                "node_vec_features": node_vec_features, 
+                "node_positions": node_positions,
+                "edge_features": edge_features,
             }
             return dst_dict, pre_output_head_latents 
         else:
@@ -946,10 +946,12 @@ class VectorField(nn.Module):
         if extract_latents_for_confidence:
             dst_dict, model_latents = vf_forward_output
             # if the user requested latents, we rely on the plumbing we have in `forward` and `denoise_graph` to obtain model_latents, and populate it to the graph
-            g.nodes["lig"].data["node_scalar_features"] = model_latents["node_scalar_features"]
-            g.nodes["lig"].data["node_vec_features"] = model_latents["node_vec_features"]
-            g.nodes["lig"].data["node_positions"] = model_latents["node_positions"]
-            g.nodes["lig"].data["edge_features"] = model_latents["edge_features"]            
+            keys = ["node_scalar_features", "node_vec_features", "node_positions"] 
+            
+            # TODO: add "edge_features", 'lig_to_lig' type does not exist right now
+            for key in keys:
+                for ntype in model_latents[key]:
+                    g.nodes[ntype].data[key] = model_latents[key][ntype]          
         else:
             dst_dict = vf_forward_output
 
