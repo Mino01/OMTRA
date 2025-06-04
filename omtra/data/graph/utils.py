@@ -181,6 +181,10 @@ class SampledSystem:
         self.bond_type_map = bond_type_map
         self.charge_map = charge_map
         self.protein_element_map = protein_element_map
+        
+        self.rdkit_ligand = None
+        self.rdkit_ref_ligand = None
+        self.rdkit_protein = None
 
         if self.fake_atoms:
             self.ligand_atom_type_map = deepcopy(self.ligand_atom_type_map)
@@ -449,18 +453,27 @@ class SampledSystem:
         return arr
 
     def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
+        if self.rdkit_ligand is not None:
+            return self.rdkit_ligand
         ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol)
         rdkit_mol = self.build_molecule(*ligdata)
+        self.rdkit_ligand = rdkit_mol
         return rdkit_mol
     
     def get_rdkit_ref_ligand(self) -> Union[None, Chem.Mol]:
+        if self.rdkit_ref_ligand is not None:
+            return self.rdkit_ref_ligand
         ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol, ref=True)
         rdkit_mol = self.build_molecule(*ligdata)
+        self.rdkit_ref_ligand = rdkit_mol
         return rdkit_mol
     
     def get_rdkit_protein(self):
+        if self.rdkit_protein is not None:
+            return self.rdkit_protein
         prot_arr = self.get_protein_array()
         prot_mol = bt_rdkit.to_mol(prot_arr)
+        self.rdkit_protein = prot_mol
         return prot_mol
 
     def convert_ligdata_to_biotite(
