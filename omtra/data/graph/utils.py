@@ -14,6 +14,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
 import numpy as np
 import biotite.structure as struc
+from biotite.interface import rdkit as bt_rdkit
 from copy import deepcopy
 from omtra.tasks.modalities import name_to_modality
 from collections import defaultdict
@@ -456,6 +457,11 @@ class SampledSystem:
         ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol, ref=True)
         rdkit_mol = self.build_molecule(*ligdata)
         return rdkit_mol
+    
+    def get_rdkit_protein(self):
+        prot_arr = self.get_protein_array()
+        prot_mol = bt_rdkit.to_mol(prot_arr)
+        return prot_mol
 
     def convert_ligdata_to_biotite(
         self,
