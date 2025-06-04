@@ -37,6 +37,12 @@ chmod +x build_env.sh
 - [ ] aux losses; interaction loss
 - [ ] gaussian smoothing on top of apo structures
 - [ ] re-run pharm conditioning with rebuild_edges=True
+- [ ] re-run pharm conditioning with better edge building parameters
+- [ ] each conv can be a self-conv followed by interacton conv
+- [ ] sampling method should be aware of replicates/ground truths/fixed features. conditioning structures (pharm, prot) should be written once per system; ground truth should be written if available.
+- [ ] add shape-color similarity for docking evaluation
+- [ ] if doing docking or conformational sampling, do more replicates for one system?
+- [ ] use sc-rdkit for denovo evals: https://github.com/oxpig/DeLinker/blob/master/analysis/calc_SC_RDKit.py
 
 # Essetial things
 
