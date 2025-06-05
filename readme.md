@@ -42,6 +42,8 @@ chmod +x build_env.sh
 - [ ] if doing docking or conformational sampling, do more replicates for one system?
 - [ ] use sc-rdkit for denovo evals: https://github.com/oxpig/DeLinker/blob/master/analysis/calc_SC_RDKit.py
 - [ ] reproduce loss weightings from flowmol
+- [ ] test fake atoms
+- [ ] implement new GVPConv that does attention similar to https://arxiv.org/abs/2003.01332
 
 # Essetial things
 
