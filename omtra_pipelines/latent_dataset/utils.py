@@ -5,6 +5,10 @@ from omtra.eval.system import SampledSystem
 # as a sanity check we can compare it to the implementation in rdkit:
 def find_rigid_alignment(A, B):
     """
+    Aligns point cloud **A** onto **B** with the Kabsch algorithm,
+    returning the coordinates of A after the optimal *proper* rotation
+    (det(R) = +1) and translation.
+
     See: https://en.wikipedia.org/wiki/Kabsch_algorithm
     2-D or 3-D registration with known correspondences.
     Registration occurs in the zero centered coordinate system, and then
@@ -14,17 +18,22 @@ def find_rigid_alignment(A, B):
         -    B: Torch tensor of shape (N,D) -- Reference Point Cloud (target)
         Returns:
         -     aligned : (N, D) torch.Tensor --  The coordinates of `A` after the optimal rotation/translation
+    Notes
+    -----
+      Only orientation-preserving transforms (proper rotations) are used;
+      reflections are **not** allowed so chirality is preserved.
 
-    Test on rotation + translation and on rotation + translation + reflection
-        >>> A = torch.tensor([[1., 1.], [2., 2.], [1.5, 3.]], dtype=torch.float)
-        >>> R0 = torch.tensor([[np.cos(60), -np.sin(60)], [np.sin(60), np.cos(60)]], dtype=torch.float)
-        >>> B = (R0.mm(A.T)).T
+    Test on rotation + translation
+        >>> import torch, math
+        >>> A = torch.tensor([[1., 1.], [2., 2.], [1.5, 3.]])
+        >>> theta = math.radians(60)
+        >>> R0 = torch.tensor([[math.cos(theta), -math.sin(theta)],
+        ...                    [math.sin(theta),  math.cos(theta)]])
         >>> t0 = torch.tensor([3., 3.])
-        >>> B += t0
+        >>> B  = (R0 @ A.T).T + t0
         >>> A_aligned = find_rigid_alignment(A, B)
-        >>> rmsd = torch.sqrt(((A_aligned - B)**2).sum(axis=1).mean())
-        >>> rmsd
-        tensor(3.7064e-07)
+        >>> torch.allclose(A_aligned, B, atol=1e-6)
+        True
     """
     a_mean = A.mean(axis=0)
     b_mean = B.mean(axis=0)
