@@ -8,7 +8,7 @@ def parse_args():
     p = argparse.ArgumentParser(description='Create new Zarr array for additional atom features.')
 
     p.add_argument('--pharmit_path', type=Path, help='Path to the Pharmit Zarr store.', default=Path('/net/galaxy/home/koes/icd3/moldiff/OMTRA/data/pharmit'))
-    p.add_argument('--n_feats', type=int, default=3, help='Number of additional features per molecule.')
+    p.add_argument('--n_feats', type=int, default=7, help='Number of additional features per molecule.')
     p.add_argument('--array_name', type=str, default='extra_feats', help='Name of the new Zarr array.')
     
     args = p.parse_args()
