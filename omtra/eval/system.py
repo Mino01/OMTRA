@@ -473,7 +473,8 @@ class SampledSystem:
         hetero = np.full_like(atom_names, False, dtype=bool)
         return coords, atom_names, elements, res_ids, res_names, chain_ids, hetero
 
-    def extract_pharm_from_graph(self, g=None):
+    def get_gt_pharmacophore(self, g=None):
+        """Returns the ground-truth pharmacophore."""
         if g is None:
             g = self.g
 

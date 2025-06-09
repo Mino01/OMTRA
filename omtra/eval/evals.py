@@ -5,8 +5,8 @@ from omtra.eval.utils import (
     reos_and_rings,
     compute_peppr_metrics_no_ref,
     compute_peppr_metrics_ref,
-    compute_pharmacophore_match
 )
+from omtra.eval.pharmacophore import compute_pharmacophore_match
 from omtra.eval.system import SampledSystem
 from typing import Dict, Any, Optional, List
 
