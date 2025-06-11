@@ -76,6 +76,12 @@ class SampledSystem:
 
     def get_n_lig_atoms(self) -> int:
         n_lig_atoms = self.g.num_nodes(ntype="lig")
+        if self.fake_atoms:
+            fake_atom_token_idx  = self.ligand_atom_type_map.index('Sn')
+            atom_type_idxs = self.g.nodes['lig'].data['a_1']
+            fake_atom_mask = atom_type_idxs == fake_atom_token_idx
+            n_fake_atoms = fake_atom_mask.sum().item()
+            n_lig_atoms -= n_fake_atoms
         return n_lig_atoms
 
     def get_atom_arr(self, reference: bool = False):
