@@ -197,6 +197,7 @@ class PlinderDataset(ZarrDataset):
                 int(system_info["link_bb_end"]),
             )
 
+
         if include_protein:
             backbone = BackboneData(
                 coords=self.slice_array(
@@ -306,6 +307,9 @@ class PlinderDataset(ZarrDataset):
                     backbone_mask=None,
                     backbone=pred_backbone,
                 )
+        else:
+            apo = None
+            pred = None
 
         is_covalent = False
         if system_info["linkages"]:
@@ -828,6 +832,9 @@ class PlinderDataset(ZarrDataset):
         edge_idxs = {}
         edge_data = {}
 
+        pocket_mask = None
+        bb_pocket_mask = None
+
         # read protein data
         if include_protein:
             (
@@ -1033,6 +1040,20 @@ class PlinderDataset(ZarrDataset):
         pskip = self.system_lookup['p_skip'].values[start_idx:end_idx]
         pskip = torch.from_numpy(pskip)
         return pskip
+
+    def retrieve_atom_idxs(self, index: int) -> Tuple:
+        """ 
+        Returns the starting and ending atom indices for the ligand 
+        """
+        system_info = self.system_lookup[
+            self.system_lookup["system_idx"] == index
+        ].iloc[0]
+
+        lig_atom_start, lig_atom_end = (
+            int(system_info["lig_atom_start"]),
+            int(system_info["lig_atom_end"]),
+        )
+        return lig_atom_start, lig_atom_end
 
 def compute_pskip(
     df: pd.DataFrame,
