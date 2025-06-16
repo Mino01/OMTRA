@@ -69,7 +69,7 @@ def geometry(
     metrics = {}
     for metric, values in metric_values.items():
         if values:
-            metrics[metric] = np.mean(values)
+            metrics[metric] = np.nanmean(values)
         else:
             metrics[metric] = -1.0
     return metrics
@@ -97,7 +97,7 @@ def flatness(
 
     for metric, values in metric_values.items():
         if values:
-            metrics[metric] = np.mean(values)
+            metrics[metric] = np.nanmean(values)
         else:
             metrics[metric] = -1.0
     return metrics
@@ -122,7 +122,7 @@ def intermolecular_distance(
 
     for metric, values in metric_values.items():
         if values:
-            metrics[metric] = np.mean(values)
+            metrics[metric] = np.nanmean(values)
         else:
             metrics[metric] = -1.0
     return metrics
@@ -151,7 +151,7 @@ def ligand_rmsd(
 
     for metric, values in metric_values.items():
         if values:
-            metrics[metric] = np.mean(values)
+            metrics[metric] = np.nanmean(values)
         else:
             metrics[metric] = -1.0
     return metrics
@@ -173,7 +173,7 @@ def volume_overlap(
             metric_values["volume_overlap"].append(vol_overlap)
     for metric, values in metric_values.items():
         if values:
-            metrics[metric] = np.mean(values)
+            metrics[metric] = np.nanmean(values)
         else:
             metrics[metric] = -1.0
     return metrics
