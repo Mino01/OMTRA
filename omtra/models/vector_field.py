@@ -61,6 +61,7 @@ class VectorField(nn.Module):
         time_embedding_dim: int = 64,
         token_dim: int = 64,
         attention: bool = False,
+        att_type: str = 'crosstype',
         n_heads: int = 1,
         s_message_dim: Optional[int] = None,
         v_message_dim: Optional[int] = None,
@@ -166,14 +167,18 @@ class VectorField(nn.Module):
         # self.edge_types = set()
         for task in task_classes:
             self.edge_types.update(get_edges_for_task(task, graph_config))
-
+            
+        
         missing_inv_edges = set()
         for etype in self.edge_types:
             inv_etype = get_inv_edge_type(etype)
             if inv_etype not in self.edge_types:
                 missing_inv_edges.add(inv_etype)
-        self.edge_types.update(missing_inv_edges)
-
+        if len(missing_inv_edges) > 0:
+            print(f"missing inverse edges: {missing_inv_edges}")       
+        # self.edge_types.update(missing_inv_edges)
+        
+        
         self.edge_types = sorted(list(self.edge_types))
 
         # create a task embedding
@@ -230,6 +235,7 @@ class VectorField(nn.Module):
                     rbf_dmax=rbf_dmax,
                     rbf_dim=rbf_dim,
                     attention=attention,
+                    att_type=att_type,
                     n_heads=n_heads,
                     s_message_dim=s_message_dim,
                     v_message_dim=v_message_dim,

@@ -1,4 +1,3 @@
-# predict.py
 import os
 from omegaconf import OmegaConf
 import hydra
@@ -6,14 +5,13 @@ from hydra.utils import instantiate
 import pytorch_lightning as pl
 import omtra.load.quick as quick_load
 import torch
+from typing import List, Any, Iterator
 
 from omtra.tasks.tasks import Task
 from omtra.tasks.register import task_name_to_class
 from omtra.eval.register import get_eval
-from omtra.scripts.visualize_pharms import pharm_to_xyz, type_idx_to_elem
+from omtra.eval.system import write_mols_to_sdf, write_arrays_to_cif
 import json
-from biotite.structure.io.pdbx import CIFFile
-import biotite.structure as struc
 
 from omtra.utils import omtra_root
 from pathlib import Path
@@ -114,19 +112,115 @@ def write_mols_to_sdf(mols, filename):
             writer.write(mol)
     writer.close()
 
-def write_arrays_to_cif(arrays, filename):
-    cif_file = CIFFile()
-    arr_stack = struc.stack(arrays)
-    struc.io.pdbx.set_structure(cif_file, arr_stack)
-    cif_file.write(filename)
+def generate_sample_names(n_systems: int, n_replicates: int) -> List[str]:
+    """
+    Generate names of the form 'sys_{system_idx}_rep_{rep_idx}'.
 
-def save_pharmacophore_xyz(sampled_systems, output_dir, task_name):
-    pharm_file = output_dir / f"{task_name}_pharmacophores.xyz"
-    with open(pharm_file, 'w') as f:
-        for sample in sampled_systems:
-            coords, types, _ = sample.extract_pharm_from_graph()
-            xyz_content = pharm_to_xyz(coords, types, type_idx_to_elem)
-            f.write(xyz_content)
+    Args:
+        n_systems: Number of unique systems.
+        n_replicates: Number of replicate samples per system.
+
+    Returns:
+        A list of strings like ['sys_0_rep_0', 'sys_0_rep_1', ..., 'sys_{n_systems-1}_rep_{n_replicates-1}'].
+    """
+    return [
+        f"sys_{i}_rep_{j}"
+        for i in range(n_systems)
+        for j in range(n_replicates)
+    ]
+
+
+def group_samples_by_system(
+    sample_names: List[str],
+    sample_objects: List[Any],
+    n_systems: int,
+    n_replicates: int
+) -> Iterator[List[Any]]:
+    """
+    Given parallel lists of names and objects, yield lists of objects
+    grouped by system ID.
+
+    Args:
+        sample_names: List of names like 'sys_{i}_rep_{j}'.
+        sample_objects: List of sample objects, same length & order as sample_names.
+        n_systems: Total number of systems (must match max sys ID + 1).
+        n_replicates: Number of replicates per system.
+
+    Yields:
+        A list of length `n_replicates` of sample_objects for each system in order 0..n_systems-1.
+
+    Raises:
+        ValueError: if lengths don’t match or names don’t parse correctly.
+    """
+    total = n_systems * n_replicates
+    if len(sample_names) != total or len(sample_objects) != total:
+        raise ValueError(
+            f"Expected {total} samples (got {len(sample_names)}/{len(sample_objects)})"
+        )
+
+    # Prepare empty slots for each system
+    grouped = {
+        sys_id: [None] * n_replicates
+        for sys_id in range(n_systems)
+    }
+
+    # Parse names and place objects into the right slot
+    for name, obj in zip(sample_names, sample_objects):
+        parts = name.split('_')
+        try:
+            sys_id = int(parts[1])
+            rep_id = int(parts[3])
+        except (IndexError, ValueError):
+            raise ValueError(f"Sample name not in 'sys_X_rep_Y' format: '{name}'")
+
+        if not (0 <= sys_id < n_systems) or not (0 <= rep_id < n_replicates):
+            raise ValueError(f"Parsed out-of-range ids sys={sys_id}, rep={rep_id}")
+
+        grouped[sys_id][rep_id] = obj
+
+    # Yield each system's list in order
+    for sys_id in range(n_systems):
+        yield grouped[sys_id]
+
+def write_ground_truth(
+        n_systems: int,
+        n_replicates: int,
+        task: Task,
+        output_dir: Path, 
+        sampled_systems,
+        g_list,
+    ):
+    for cond_idx in range(n_systems):
+
+        # get an example system containing the ground truth information of interest
+        sys_idx = cond_idx*n_replicates
+        sys = sampled_systems[sys_idx]
+
+        # directory for writing ground truth
+        sys_gt_dir = output_dir / f"sys_{cond_idx}_gt"
+        sys_gt_dir.mkdir(parents=True, exist_ok=True)
+
+        # write the ground truth ligand
+        gt_lig_file = sys_gt_dir / "ligand.sdf"
+        sys.write_ligand(
+            gt_lig_file, 
+            ground_truth=True, 
+            g=g_list[cond_idx].to('cpu'),
+        )
+
+        # write the ground truth protein if present
+        if 'protein_identity' in task.groups_present:
+            gt_prot_file = sys_gt_dir / "protein.cif"
+            sys.write_protein(gt_prot_file, ground_truth=True)
+
+        # write the ground truth pharmacophore
+        if 'pharmacophore' in task.groups_present:
+            gt_pharm_file = sys_gt_dir / "pharmacophore.xyz"
+            sys.write_pharmacophore(
+                gt_pharm_file, 
+                ground_truth=True, 
+                g=g_list[cond_idx].to('cpu')
+                )
 
 def main(args):
     # 1) resolve checkpoint path
@@ -200,34 +294,99 @@ def main(args):
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving samples to {output_dir}")
 
-    if task_name == "denovo_ligand_from_pharmacophore":
-        save_pharmacophore_xyz(sampled_systems, output_dir, task_name)
-
-    if args.visualize:
+    if task.unconditional and not args.visualize:
+        lig_samples = [ s.get_rdkit_ligand() for s in sampled_systems ]
+        output_file = output_dir / f"{task_name}_lig.sdf"
+        write_mols_to_sdf(lig_samples, output_file)
+    elif task.unconditional and args.visualize:
         for i, sys in enumerate(sampled_systems):
-            prot = 'protein_identity' in task.groups_present
-            xt_traj_mols = sys.build_traj(ep_traj=False, lig=True, prot=prot)
-            xhat_traj_mols = sys.build_traj(ep_traj=True, lig=True, prot=prot)
-            lig_xt_file = output_dir / f"{task_name}_lig_xt_traj_{i}.sdf"
-            lig_xhat_file = output_dir / f"{task_name}_lig_xhat_traj_{i}.sdf"
-            write_mols_to_sdf(xt_traj_mols['lig'], lig_xt_file)
-            write_mols_to_sdf(xhat_traj_mols['lig'], lig_xhat_file)
-            
-            if 'protein_identity' in task.groups_present or 'protein_structure' in task.groups_present:
-                prot_xt_file = output_dir / f"{task_name}_prot_xt_traj_{i}.cif"
-                prot_xhat_file = output_dir / f"{task_name}_prot_xhat_traj_{i}.cif"
-                write_arrays_to_cif(xt_traj_mols['prot'], prot_xt_file)
-                write_arrays_to_cif(xhat_traj_mols['prot'], prot_xhat_file)
-    else:
-        rdkit_mols = [ s.get_rdkit_ligand() for s in sampled_systems ]
-        output_file = output_dir / f"{task_name}_samples.sdf"
-        write_mols_to_sdf(rdkit_mols, output_file)
+            lig_xt_file = output_dir / f"sys{i}_xt.sdf"
+            lig_xhat_file = output_dir / f"sys{i}_xhat.sdf"
+            sys.write_ligand(lig_xt_file, trajectory=True, endpoint=False)
+            sys.write_ligand(lig_xhat_file, trajectory=True, endpoint=True)
+    elif not task.unconditional and not args.visualize:
+        # write ground truth for everything in the system, once per system
+        write_ground_truth(
+            n_systems=len(g_list),
+            n_replicates=n_replicates,
+            task=task,
+            output_dir=output_dir,
+            sampled_systems=sampled_systems,
+            g_list=g_list
+            )
 
-        if 'protein_identity' in task.groups_present or 'protein_structure' in task.groups_present:
-            prot_arrays = [ s.get_protein_array() for s in sampled_systems ]
-            for i, prot_arr in enumerate(prot_arrays):
-                prot_file = output_dir / f"{task_name}_prot_{i}.cif"
-                write_arrays_to_cif([prot_arr], prot_file)
+        # collect all the ligands for each system
+        sample_names = generate_sample_names(
+            n_systems=len(g_list), 
+            n_replicates=n_replicates
+        )
+        for sys_id, replicates in enumerate(
+            group_samples_by_system(
+            sample_names=sample_names,
+            sample_objects=sampled_systems,
+            n_systems=len(g_list),
+            n_replicates=n_replicates
+            )
+        ):
+            sys_gt_dir = output_dir / f"sys_{sys_id}_gt"
+
+            # write all ligands
+            if 'ligand_structure' in task.groups_generated:
+                ligands = [s.get_rdkit_ligand() for s in replicates]
+                output_file = sys_gt_dir / f"gen_ligands.sdf"
+                write_mols_to_sdf(ligands, output_file)
+
+            if 'protein_structure' in task.groups_generated:
+                # write all proteins
+                proteins = [s.get_protein_array() for s in replicates]
+                prot_file = sys_gt_dir / f"gen_prot.cif"
+                write_arrays_to_cif(proteins, prot_file)
+
+            if 'pharmacophore' in task.groups_generated:
+                pharms = [s.get_pharmacaphore_from_graph(xyz=True) for s in replicates]
+                pharm_file = sys_gt_dir / f"gen_pharm.cif"
+                with open(pharm_file, 'w') as f:
+                    f.write(sum(pharms))
+
+    elif not task.unconditional and args.visualize:
+        # write ground truth for everything in the system, once per system
+        write_ground_truth(
+            n_systems=len(g_list),
+            n_replicates=n_replicates,
+            task=task,
+            output_dir=output_dir,
+            sampled_systems=sampled_systems,
+            g_list=g_list)
+        
+        # collect all the ligands for each system
+        sample_names = generate_sample_names(
+            n_systems=len(g_list), 
+            n_replicates=n_replicates
+        )
+        for sample_idx, (sample_name, system) in enumerate(zip(
+            sample_names, sampled_systems
+        )):
+            base_system_idx = sample_idx // n_replicates
+            sys_gt_dir = output_dir / f"sys_{base_system_idx}_gt"
+            
+
+            if 'ligand_structure' in task.groups_generated:
+                lig_xt_file = sys_gt_dir / f"{sample_name}_lig_xt.sdf"
+                lig_xhat_file = sys_gt_dir / f"{sample_name}_lig_xhat.sdf"
+                system.write_ligand(lig_xt_file, trajectory=True, endpoint=False)
+                system.write_ligand(lig_xhat_file, trajectory=True, endpoint=True)
+
+            if 'protein_structure' in task.groups_generated:
+                prot_xt_file = sys_gt_dir / f"{sample_name}_prot_xt.cif"
+                prot_xhat_file = sys_gt_dir / f"{sample_name}_prot_xhat.cif"
+                system.write_protein(prot_xt_file, trajectory=True, endpoint=False)
+                system.write_protein(prot_xhat_file, trajectory=True, endpoint=True)
+
+            if 'pharmacophore' in task.groups_generated:
+                pharm_xt_file = sys_gt_dir / f"{sample_name}_pharm_xt.cif"
+                pharm_xhat_file = sys_gt_dir / f"{sample_name}_pharm_xhat.cif"
+                system.write_pharmacophore(pharm_xt_file, trajectory=True, endpoint=False)
+                system.write_pharmacophore(pharm_xhat_file, trajectory=True, endpoint=True)
 
     if args.metrics:
         eval_fn = get_eval(task_name)

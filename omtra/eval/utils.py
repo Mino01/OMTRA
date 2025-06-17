@@ -1,42 +1,23 @@
 from omtra.eval.system import SampledSystem
 from omtra.eval.reos import REOS
 from omtra.eval.ring_systems import RingSystemCounter, ring_counts_to_df
-from omtra.data.pharmacophores import get_pharmacophores
 from collections import Counter
 from rdkit import Chem
 from typing import List, Dict, Any, Optional, Tuple
 import peppr
 from biotite import structure as struc
+from biotite.interface import rdkit as bt_rdkit
+import pandas as pd
+import numpy as np
 import functools
 from pathlib import Path
 from omtra.utils import omtra_root
 import yaml
 from collections import defaultdict
+from posebusters import PoseBusters
 import numpy as np
-
-allowed_bonds = {
-    "H": {0: 1, 1: 0, -1: 0},
-    "C": {0: [3, 4], 1: 3, -1: 3},
-    "N": {
-        0: [2, 3],
-        1: [2, 3, 4],
-        -1: 2,
-    },  # In QM9, N+ seems to be present in the form NH+ and NH2+
-    "O": {0: 2, 1: 3, -1: 1},
-    "F": {0: 1, -1: 0},
-    "B": 3,
-    "Al": 3,
-    "Si": 4,
-    "P": {0: [3, 5], 1: 4},
-    "S": {0: [2, 6], 1: [2, 3], 2: 4, 3: 5, -1: 3},
-    "Cl": 1,
-    "As": 3,
-    "Br": {0: 1, 1: 2},
-    "I": 1,
-    "Hg": [1, 2],
-    "Bi": [3, 5],
-    "Se": [2, 4, 6],
-}
+from omtra.tasks.register import task_name_to_class
+import dgl
 
 
 # adapted from flowmol metrics.py
@@ -138,85 +119,6 @@ def compute_stability(sampled_systems: List[SampledSystem]):
     }
     return metrics
 
-
-def group_pharm_types_by_position(positions, types):
-    grouped = defaultdict(set)
-    for pos, t in zip(positions, types):
-        key = tuple(np.round(pos, 3))
-        grouped[key].add(t)
-    return grouped
-
-def compute_pharmacophore_match(sampled_systems: List[SampledSystem], threshold=1.0):
-    total_true = total_gen = total_extra = matched = extra_gen = sample_match = 0
-    error_counts = defaultdict(int)
-    
-    for sample in sampled_systems:
-
-        try:
-            rdmol = sample.get_rdkit_ligand()
-            gen_coords, gen_types, _, _ = get_pharmacophores(rdmol)
-            gen_coords = np.array(gen_coords)
-            gen_types = np.array(gen_types)
-        except Chem.rdchem.AtomValenceException:
-            error_counts['get_pharmacophores_AtomValenceException'] += 1
-            continue
-        except Exception as e:
-            error_type = f"get_pharmacophores_{type(e).__name__}"
-            error_counts[error_type] += 1
-            continue
-
-        true_coords, true_types, _ = sample.extract_pharm_from_graph()
-        true_coords = np.array(true_coords)
-        true_types = np.array(true_types)
-
-        # to compare positions that have multiple types
-        g_gen = group_pharm_types_by_position(gen_coords, gen_types)
-        g_true = group_pharm_types_by_position(true_coords, true_types)
-        
-        true_items = list(g_true.items())
-        gen_items = list(g_gen.items())
-        
-        matched_gen = set()
-        matched_true = 0
-        
-        for i, (true_pos, true_types_set) in enumerate(true_items):
-            best_j, best_dist = None, threshold + 1
-            
-            for j, (gen_pos, gen_types_set) in enumerate(gen_items):
-                if j in matched_gen or true_types_set != gen_types_set:
-                    continue
-                    
-                dist = np.linalg.norm(np.array(true_pos) - np.array(gen_pos))
-                if dist <= threshold and dist < best_dist:
-                    best_j, best_dist = j, dist
-            
-            if best_j is not None:
-                matched_gen.add(best_j)
-                matched_true += len(true_types_set)
-        
-        extra_gen = sum(len(gen_types_set) for j, (_, gen_types_set) in enumerate(gen_items) 
-                          if j not in matched_gen)
-        
-        matched += matched_true
-        total_extra += extra_gen
-        total_true += len(true_types)
-        total_gen += len(gen_types)
-        
-        if matched_true == len(true_types) and extra_gen == 0:
-            sample_match += 1
-    
-    for error, count in error_counts.items():
-        print(f"{error}: {count}")
-
-    metrics =  {
-        "frac_pharm_samples_matching": sample_match / len(sampled_systems),
-        "frac_true_centers_matched": matched / total_true if total_true else 0,
-        "frac_gen_centers_extra": total_extra / total_gen if total_gen else 0,
-        "num_true_centers": total_true,
-        "num_gen_centers": total_gen
-    }
-
-    return metrics
 
 @functools.lru_cache()
 def get_valid_valency_table() -> dict:
@@ -357,6 +259,67 @@ def compute_peppr_metrics_ref(sampled_systems: List[SampledSystem]):
     metrics = evaluator.summarize_metrics()
     return metrics
 
+# redock is for ligands docked into cognate receptor
+def bust_redock(sampled_systems: List[SampledSystem]):
+    buster = PoseBusters(config="redock")
+    metrics_to_log = ["mol_pred_energy", "aromatic_ring_maximum_distance_from_plane", "non-aromatic_ring_maximum_distance_from_plane", "double_bond_maximum_distance_from_plane", "volume_overlap_protein", "rmsd"]
+    collected_values = {metric: [] for metric in metrics_to_log}
+    for i, sys in enumerate(sampled_systems):
+        prot_arr = sys.get_protein_array()
+        prot_mol = bt_rdkit.to_mol(prot_arr)
+        lig_mol = sys.get_rdkit_ligand()
+        ref_mol = sys.get_rdkit_ref_ligand()
+        try:
+            res = buster.bust([lig_mol], ref_mol, prot_mol, full_report=True)
+        except:
+            continue
+        for metric in metrics_to_log:
+            value = res.iloc[0][metric] if metric in res.columns else None
+            if not pd.isna(value):
+                collected_values[metric].append(value)
+    metrics = {
+        metric: np.mean(values) if values else -1
+        for metric, values in collected_values.items()
+    }
+    return metrics
+
+# dock is for de novo ligand or docking into non-cognate receptor       
+def bust_dock(sampled_systems: List[SampledSystem]):
+    buster = PoseBusters(config="dock")
+    metrics_to_log = ["mol_pred_energy", "aromatic_ring_maximum_distance_from_plane", "non-aromatic_ring_maximum_distance_from_plane", "double_bond_maximum_distance_from_plane", "volume_overlap_protein"]
+    collected_values = {metric: [] for metric in metrics_to_log}
+    for i, sys in enumerate(sampled_systems):
+        prot_arr = sys.get_protein_array()
+        prot_mol = bt_rdkit.to_mol(prot_arr)
+        lig_mol = sys.get_rdkit_ligand()
+        try:
+            res = buster.bust([lig_mol], None, prot_mol, full_report=True)
+        except:
+            continue
+        for metric in metrics_to_log:
+            value = res.iloc[0][metric] if metric in res.columns else None
+            if not pd.isna(value):
+                collected_values[metric].append(value)
+    metrics = {
+        metric: np.mean(values) if values else -1
+        for metric, values in collected_values.items()
+    }
+    return metrics
+        
+
+def bust_mol(sampled_systems: List[SampledSystem]):
+    buster = PoseBusters(config="mol")
+    lig_mols = [sys.get_rdkit_ligand() for sys in sampled_systems]
+    res = buster.bust(lig_mols, None, None, full_report=True)
+    metrics_to_log = ["mol_pred_energy", "aromatic_ring_maximum_distance_from_plane", "non-aromatic_ring_maximum_distance_from_plane", "double_bond_maximum_distance_from_plane"]
+    
+    metrics = {
+        metric: res[metric].dropna().mean() if metric in res.columns else -1
+        for metric in metrics_to_log
+    }
+
+    return metrics
+
 
 def add_task_prefix(metrics: Dict[str, Any], task_name: str) -> Dict[str, Any]:
     """Add the task name as a prefix to the metric names."""
@@ -365,3 +328,4 @@ def add_task_prefix(metrics: Dict[str, Any], task_name: str) -> Dict[str, Any]:
         new_key = f"{task_name}/{key}"
         new_metrics[new_key] = value
     return new_metrics
+
