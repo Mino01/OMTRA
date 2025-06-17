@@ -76,7 +76,12 @@ class PharmitDataset(ZarrDataset):
         start_idx, end_idx = int(start_idx), int(end_idx)
         for nfeat in ['x', 'a', 'c']:
             xace_dict[nfeat] = self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
-    
+
+        # extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
+        # extra_feats_dict = {}
+        # for col_idx, feat in enumerate(self.root['lig/node/extra_feats'].attrs.get('features', [])):
+        #   extra_feats_dict[feat] = extra_feats[:, col_idx]
+
             
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
@@ -114,7 +119,7 @@ class PharmitDataset(ZarrDataset):
                 'x_1_true': xace_ligand.x, 
                 'a_1_true': xace_ligand.a,
                 'c_1_true': lig_c,
-                },
+                }, #| extra_feats_dict,
         }
         g_edge_data = {
             'lig_to_lig': {

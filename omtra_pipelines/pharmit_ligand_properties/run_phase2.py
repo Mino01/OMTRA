@@ -11,7 +11,7 @@ from functools import partial
 from omtra.load.quick import datamodule_from_config
 import omtra.load.quick as quick_load
 
-from omtra_pipelines.plinder_ligand_properties.phase2 import *
+from omtra_pipelines.pharmit_ligand_properties.phase2 import *
 
 import multiprocessing
 multiprocessing.set_start_method('spawn', force=True)
