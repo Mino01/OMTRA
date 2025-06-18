@@ -77,10 +77,12 @@ class PharmitDataset(ZarrDataset):
         for nfeat in ['x', 'a', 'c']:
             xace_dict[nfeat] = self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
 
+        # Get extra ligand atom features as a dictionary
         # extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
         # extra_feats_dict = {}
-        # for col_idx, feat in enumerate(self.root['lig/node/extra_feats'].attrs.get('features', [])):
-        #   extra_feats_dict[feat] = extra_feats[:, col_idx]
+        # for col_idx, feat in enumerate(self.root['lig/node/extra_feats'].attrs.get('features', [])): 
+        #     col_data = lig_extra_feats[:, col_idx]         
+        #     extra_feats_dict[feat] = torch.from_numpy(col_data).long()
 
             
         # get slice indicies for ligand-ligand edges
@@ -119,7 +121,7 @@ class PharmitDataset(ZarrDataset):
                 'x_1_true': xace_ligand.x, 
                 'a_1_true': xace_ligand.a,
                 'c_1_true': lig_c,
-                }, #| extra_feats_dict,
+                }, #| extra_feats_dict, TODO: add extra feats as ligand node data
         }
         g_edge_data = {
             'lig_to_lig': {

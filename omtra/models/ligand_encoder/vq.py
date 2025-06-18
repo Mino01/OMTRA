@@ -27,7 +27,8 @@ class Encoder(nn.Module):
             latent_dim: int = 8, 
             rbf_dim: int = 10, 
             rbf_dmax: int = 32,
-            mask_prob: float = 0.0):
+            mask_prob: float = 0.0,
+            include_extra_feats: bool = True):
         super(Encoder, self).__init__()
 
         self.mask_prob = mask_prob
@@ -36,6 +37,7 @@ class Encoder(nn.Module):
         self.latent_dim = latent_dim
         self.rbf_dim = rbf_dim
         self.rbf_dmax = rbf_dmax
+        self.include_extra_feats = include_extra_feats
 
 
         self.a_embedding = nn.Embedding(num_embeddings=len(lig_atom_type_map)+int(mask_prob>0), embedding_dim=a_embed_dim)
@@ -80,6 +82,10 @@ class Encoder(nn.Module):
         atom_types[mask] = len(lig_atom_type_map)  # Set masked atom types to the last index (masked atom type)
         atom_charges[mask] = len(charge_map)  # Set masked atom charges to the last index (masked atom charge)
 
+        if self.include_extra_feats:
+            atom_impl_H =  g.nodes['lig'].data['impl_H'].clone()
+            atom_impl_H =  g.nodes['lig'].data['impl_H'].clone()
+            
         # embed discrete data
         node_scalar_inputs = [self.a_embedding(atom_types), self.c_embedding(atom_charges)]  # (n_nodes, a_embed_dim + c_embed_dim)
         scalar_feats = {

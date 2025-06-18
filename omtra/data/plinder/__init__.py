@@ -47,6 +47,9 @@ class LigandData:
     coords: np.ndarray
     atom_types: np.ndarray
     atom_charges: np.ndarray
+
+    atom_extra_feats: Dict
+
     bond_types: np.ndarray
     bond_indices: np.ndarray
     is_covalent: bool

@@ -11,6 +11,10 @@ ph_idx_to_type = [
 ]
 charge_map = [-3, -2, -1, 0, 1, 2, 3, 4, 5, 6]
 
+hybridization_map = ['unspecified', 's', 'sp', 'sp2', 'sp3', 'sp3d', 'sp3d2', 'other']
+max_impl_H = 3  # TODO: cross-check value with Pharmit
+max_frags = 35  # TODO: cross-check value with Pharmit
+
 ph_type_to_idx = {val: idx for idx, val in enumerate(ph_idx_to_type)}
 
 protein_element_map = [
@@ -404,3 +408,6 @@ DEFAULT_DISTANCE_RANGE = {
     ("SE", "SE"): (2.340 - 2 * 0.024, 2.340 + 2 * 0.024),
     ("SI", "SE"): (2.359 - 2 * 0.012, 2.359 + 2 * 0.012),
 }
+
+
+

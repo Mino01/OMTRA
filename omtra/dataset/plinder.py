@@ -315,6 +315,14 @@ class PlinderDataset(ZarrDataset):
         if system_info["linkages"]:
             is_covalent = True
 
+        # Get extra ligand atom features as a dictionary
+        lig_extra_feats = self.slice_array(f'ligand/extra_feats', lig_atom_start, lig_atom_end)
+        lig_extra_feats_dict = {}
+        for col_idx, feat in enumerate(self.root['ligand/extra_feats'].attrs.get('features', [])): 
+            col_data = lig_extra_feats[:, col_idx]         
+            lig_extra_feats_dict[feat] = torch.from_numpy(col_data).long()
+
+
         ligand = LigandData(
             sdf=system_info["lig_sdf"],
             ccd=system_info["ccd"],
@@ -327,6 +335,9 @@ class PlinderDataset(ZarrDataset):
             atom_charges=self.slice_array(
                 "ligand/atom_charges", lig_atom_start, lig_atom_end
             ),  # c
+
+            atom_extra_feats= lig_extra_feats_dict,
+
             bond_types=self.slice_array(
                 "ligand/bond_types", lig_bond_start, lig_bond_end
             ),  # e
@@ -623,7 +634,7 @@ class PlinderDataset(ZarrDataset):
                 "x_1_true": lig_xace.x,
                 "a_1_true": lig_xace.a,
                 "c_1_true": lig_c,
-            }
+            } | ligand.atom_extra_feats
         }
 
         edge_data = {
