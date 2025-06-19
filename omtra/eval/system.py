@@ -506,21 +506,21 @@ class SampledSystem:
         else:
             feat_suffix = "1"
 
-        coords = self.g.nodes["prot_atom"].data[f"x_{feat_suffix}"].numpy()
-        atypes = self.g.nodes["prot_atom"].data[f"a_1_true"].numpy()
+        coords = g.nodes["prot_atom"].data[f"x_{feat_suffix}"].numpy()
+        atypes = g.nodes["prot_atom"].data[f"a_1_true"].numpy()
         atom_type_map_array = np.array(self.protein_atom_type_map, dtype="U3")
         atom_names = atom_type_map_array[atypes]
 
-        eltypes = self.g.nodes["prot_atom"].data[f"e_1_true"].numpy()
+        eltypes = g.nodes["prot_atom"].data[f"e_1_true"].numpy()
         element_type_map_array = np.array(self.protein_element_map, dtype="U2")
         elements = element_type_map_array[eltypes]
 
-        res_ids = self.g.nodes["prot_atom"].data["res_id"].numpy()
-        res_types = self.g.nodes["prot_atom"].data["res_names"].numpy()
+        res_ids = g.nodes["prot_atom"].data["res_id"].numpy()
+        res_types = g.nodes["prot_atom"].data["res_names"].numpy()
         res_type_map_array = np.array(self.residue_map, dtype="U3")
         res_names = res_type_map_array[res_types]
 
-        chain_ids = self.g.nodes["prot_atom"].data["chain_id"].numpy()
+        chain_ids = g.nodes["prot_atom"].data["chain_id"].numpy()
         hetero = np.full_like(atom_names, False, dtype=bool)
         return coords, atom_names, elements, res_ids, res_names, chain_ids, hetero
 
