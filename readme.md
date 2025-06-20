@@ -37,6 +37,7 @@ chmod +x build_env.sh
 - [ ] reproduce loss weightings from flowmol
 - [ ] add vpa: https://arxiv.org/abs/2403.04747
 - [ ] where are node dists generated in plinder pipeline? where to put them for crossdocked?
+- [ ] pharmacophore sub-sampling
 
 
 # Essetial things
