@@ -27,15 +27,10 @@ n_zarr_chunks = 2
 
 model = quick_load.omtra_from_checkpoint(ckpt_path).cuda().eval()
 
-# Pre-compute latent dimensions
-print("Pre-computing latent dimensions")
-atom_counts_per_sample = []
-for i in tqdm(range(num_total_samples), desc="Sizing dataset"):
-    g = pharmit_dataset[('ligand_conformer', i)]
-    atom_counts_per_sample.append(g.num_nodes('lig'))
-
-total_atoms = sum(atom_counts_per_sample)
-
+# Get the total number of atoms in the dataset
+graph_lookup = pharmit_dataset.slice_array('lig/node/graph_lookup', 0, num_total_samples)
+atom_counts_per_sample = graph_lookup[:, 1] - graph_lookup[:, 0]
+total_atoms = int(graph_lookup[-1, 1])  # idx of the last atom of the last sample
 
 dataset_spec = {
     'n_mols' : num_total_samples,
@@ -44,7 +39,7 @@ dataset_spec = {
     'vector_dim': model.vector_field.n_vec_channels
 }
 
-graph_lookup_table = build_lookup_table(np.array(atom_counts_per_sample))
+graph_lookup_table = build_lookup_table(atom_counts_per_sample)
 
 _, root = init_zarr_store_latents(
     store_path=output_zarr_path, 
