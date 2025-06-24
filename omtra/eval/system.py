@@ -63,6 +63,7 @@ class SampledSystem:
         self.bond_type_map = bond_type_map
         self.charge_map = charge_map
         self.protein_element_map = protein_element_map
+        self._cached_protein_array = None
         
         self.rdkit_ligand = None
         self.rdkit_ref_ligand = None
@@ -331,6 +332,9 @@ class SampledSystem:
         return atom_array
 
     def get_protein_array(self, g=None, reference: bool = False, include_bonds: bool = True):
+        if g is None and reference and include_bonds:
+            if self._cached_protein_array is not None:
+                return self._cached_protein_array
         coords, atom_names, elements, res_ids, res_names, chain_ids, hetero = (
             self.extract_protdata_from_graph(g=g, reference=reference)
         )
@@ -344,6 +348,8 @@ class SampledSystem:
             hetero=hetero,
             include_bonds=include_bonds,
         )
+        if g is None and reference and include_bonds:
+            self._cached_protein_array = arr
         return arr
 
     def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
