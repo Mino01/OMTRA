@@ -112,8 +112,8 @@ class MoleculeTensorizer():
 def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False) -> MolXACE:
     """Converts an RDKit molecule to a MolXACE data class containing the positions, atom types, atom charges, bond types, bond indexes, and unique valencies."""
     try:
-        Chem.Kekulize(molecule, clearAromaticFlags=True)
         Chem.SanitizeMol(molecule)
+        Chem.Kekulize(molecule, clearAromaticFlags=True)
     except Exception as e:
         traceback.print_exc()
         return MolXACE(failure_mode="sanitization/kekulization")
@@ -121,6 +121,11 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
     # remove hydrogens if explicit hydrogens are not desired
     if not explicit_hydrogens:
         molecule = Chem.RemoveHs(molecule)
+        try:
+            Chem.Kekulize(molecule, clearAromaticFlags=True)
+        except Exception as e:
+            traceback.print_exc()
+            return MolXACE(failure_mode="kekulization")
 
     num_fragments = len(Chem.GetMolFrags(molecule, sanitizeFrags=False))
     if num_fragments > 1:
@@ -147,23 +152,8 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
     # get one-hot encoded bonds (only existing bonds) using the upper-triangular portion of the adjacency matrix
     adj = Chem.rdmolops.GetAdjacencyMatrix(molecule, useBO=True)
     
-    # fun little bug!
-    # it turns out that if you kekulize a molecule, then compute the adjacency matrix
-    # this operation will sometimes change bonds back from single/double to aromatic
-    # so we have to re-kekulize and then manually fix the adjacency matrix
-    # i think this is only a problem with using implicit hydrogens
     arom_idxs = np.where(adj == 1.5)
-    if arom_idxs[0].size != 0:
-        Chem.Kekulize(molecule, clearAromaticFlags=True)
-        bo_map = {
-            Chem.BondType.SINGLE: 1,
-            Chem.BondType.DOUBLE: 2,
-        }
-        src_idxs, dst_idxs = arom_idxs
-        src_idxs = src_idxs.tolist()
-        dst_idxs = dst_idxs.tolist()
-        for src_idx, dst_idx in zip(src_idxs, dst_idxs):
-            adj[src_idx, dst_idx] = bo_map[molecule.GetBondBetweenAtoms(src_idx, dst_idx).GetBondType()]
+    assert arom_idxs[0].size == 0, "Aromatic bonds should not be present in the adjacency matrix."
 
     edge_index = np.nonzero(np.triu(adj))  # tuple of arrays for upper triangle indices
     if len(edge_index[0]) == 0:
