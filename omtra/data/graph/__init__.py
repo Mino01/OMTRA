@@ -133,7 +133,8 @@ def build_complex_graph(
         # all under the prot_atom_to_prot_atom edge type
         # for computational efficiency, we infer covalent bonds once (right now) and store it on the graph
         # for future access
-        edge_construction_dict['prot_atom_covalent_prot_atom'] = (cov_edges[0], cov_edges[1])
+        canonical_etype = to_canonical_etype('prot_atom_covalent_prot_atom')
+        edge_construction_dict[canonical_etype] = (cov_edges[0], cov_edges[1])
 
     # TODO: follow graph_config to construct other edges
     # examples: res-res fully connected? pharm-pharm fully connected?

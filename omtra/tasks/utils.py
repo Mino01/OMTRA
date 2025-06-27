@@ -94,7 +94,7 @@ def remove_edges(g: dgl.DGLHeteroGraph, lig_only: bool = False) -> dgl.DGLHetero
 def get_combined_edges(g, new_edge_idxs: torch.Tensor):
 
     # new_edge_idxs has shape (2, n_edges, )
-    cov_edge_idxs = torch.stack(g.edges(etype='cov_prot_edges'), dim=0) # has shape (2, n_edges)
+    cov_edge_idxs = torch.stack(g.edges(etype='prot_atom_covalent_prot_atom'), dim=0) # has shape (2, n_edges)
 
     # concatenate along the edge dimension → [2, n_a + n_b]
     edges = torch.cat([cov_edge_idxs, new_edge_idxs], dim=1)
