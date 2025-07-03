@@ -170,15 +170,14 @@ def run_parallel(pharmit_path: Path,
     n_blocks = (n_mols + block_size - 1) // block_size
     print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
 
-    #pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
-    pbar = tqdm(total=n_blocks-48660, desc="Processing", unit="blocks")
+    pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
  
     error_counter = [0]
 
     with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(pharmit_path, store_name), maxtasksperchild=5) as pool:
         pending = []
 
-        for block_idx in range(48660, n_blocks):
+        for block_idx in range(n_blocks):
             
             while len(pending) >= max_pending:
                 # Filter out jobs that have finished
@@ -234,9 +233,8 @@ def run_single(pharmit_path: Path,
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
     error_counter = [0]   # simple error counter
 
-    for block_idx in [20109]:
-        #block_start_idx = block_idx * block_size      
-        block_start_idx  = 201097850
+    for block_idx in range(n_blocks):
+        block_start_idx = block_idx * block_size      
         try:
             start_time = time.time()
             result = process_pharmit_block(block_start_idx, block_size)
