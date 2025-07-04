@@ -4,8 +4,9 @@ import traceback
 from tqdm import tqdm
 import time
 import torch
+import zarr
 
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool
 from functools import partial
 
 from omtra.load.quick import datamodule_from_config
@@ -29,52 +30,49 @@ def parse_args():
  
     return p.parse_args()
 
-pharmit_dataset = None
+# define global variables
+atom_types = None
+atom_charge = None
+extra_feats = None
+global_unique_feats = torch.zeros((0, 7)) 
 
-
-def process_pharmit_block(block_start_idx: int, block_size: int):
+def process_pharmit_block(block_start_idx: int, block_end_idx: int):
     """ 
     Parameters:
-        block_start_idx (int): Index of the first ligand in the block
-        block_size (int): Number of ligands in the block
+        block_start_idx (int): Index of the first atom in the block
+        block_end_idx (int): Index of the last atom in the block
 
     Returns:
         Number of unique extra feature vectors in the block
     """
     
-    global pharmit_dataset
+    global atom_types, atom_charges, extra_feats
 
-    n_mols = len(pharmit_dataset)
-    block_end_idx = min(block_start_idx + block_size, n_mols)
-    block_graphs = [pharmit_dataset[('denovo_ligand_extra_feats', idx)] for idx in range(block_start_idx, block_end_idx)]
-    extra_feats = torch.cat([torch.stack([g.nodes['lig'].data['a_1_true'],
-                                          g.nodes['lig'].data['c_1_true'],
-                                          g.nodes['lig'].data['impl_H_1_true'],
-                                          g.nodes['lig'].data['aro_1_true'],
-                                          g.nodes['lig'].data['hyb_1_true'],
-                                          g.nodes['lig'].data['ring_1_true'],
-                                          g.nodes['lig'].data['chiral_1_true']], dim=1)
-                              for g in block_graphs], dim=0)
+    atom_feats = torch.cat([torch.tensor(atom_types[block_start_idx: block_end_idx]).unsqueeze(1), 
+                            torch.tensor(atom_charges[block_start_idx: block_end_idx]).unsqueeze(1),
+                            torch.tensor(extra_feats[block_start_idx: block_end_idx, :-1])], dim=1)
     
-    unique_feats = torch.unique(extra_feats, dim=0)
+    unique_feats = torch.unique(atom_feats, dim=0)
 
     return unique_feats
 
 
-def worker_initializer(pharmit_path, store_name):
+def worker_initializer(store_path):
     """ Sets pharmit dataset instance as a global variable """
-    global pharmit_dataset
+    global atom_types, atom_charges, extra_feats
 
-    cfg = quick_load.load_cfg(overrides=['task_group=no_protein_extra_feats'], pharmit_path=pharmit_path)
-    datamodule = datamodule_from_config(cfg)
-    dataset = datamodule.load_dataset(store_name)
-    pharmit_dataset = dataset.datasets['pharmit']
+    root = zarr.open(store_path, mode='r+')
+    lig_node_group = root['lig/node']
+    atom_types = lig_node_group['a']
+    atom_charges = lig_node_group['c']
+    extra_feats = lig_node_group['extra_feats']
  
 
-def save_and_update(block_unique_feats, all_unique_feats, pbar):
-    """ Callback to new features for a block and update progress """
-    all_unique_feats.append(block_unique_feats)
-    print(f"{torch.unique(torch.cat(list(all_unique_feats), dim=0), dim=0).shape[0]} unique features found.")
+def save_and_update(block_unique_feats, pbar):
+    """ Callback to new features for a block and update progress """    
+    global global_unique_feats
+
+    global_unique_feats = torch.unique(torch.cat([global_unique_feats, block_unique_feats], dim=0), dim=0)
     pbar.update(1)
 
 
@@ -107,22 +105,19 @@ def run_parallel(pharmit_path: Path,
     if max_pending is None:
         max_pending = n_cpus * 2 
 
-    # Load Pharmit dataset (also needed for number of ligands)
-    cfg = quick_load.load_cfg(overrides=['task_group=no_protein_extra_feats'], pharmit_path=pharmit_path)
-    datamodule = datamodule_from_config(cfg)
-    dataset = datamodule.load_dataset(store_name)
-    pharmit_dataset = dataset.datasets['pharmit']
+    store_path = pharmit_path+'/'+store_name+'.zarr'
+    root = zarr.open(store_path, mode='r+')
 
-    n_mols = len(pharmit_dataset)
-    n_blocks = (n_mols + block_size - 1) // block_size
+    n_atoms = root['lig/node/a'].shape[0]
+    n_blocks = (n_atoms + block_size - 1) // block_size
+
     print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
+    print(f"––––––––––––––––––––––––––––––––––")
 
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
- 
     error_counter = [0]
-    all_unique_feats = Manager().list()
-
-    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(pharmit_path, store_name), maxtasksperchild=5) as pool:
+    
+    with Pool(processes=n_cpus, initializer=worker_initializer, initargs=(store_path,), maxtasksperchild=5) as pool:
         pending = []
 
         for block_idx in range(n_blocks):
@@ -134,7 +129,6 @@ def run_parallel(pharmit_path: Path,
                     time.sleep(0.1)
             
             callback_fn = partial(save_and_update,
-                                  all_unique_feats=all_unique_feats,
                                   pbar=pbar)
 
             error_callback_fn = partial(error_and_update,
@@ -146,7 +140,7 @@ def run_parallel(pharmit_path: Path,
             block_start_idx = block_idx * block_size
 
             result = pool.apply_async(process_pharmit_block,
-                                      args=(block_start_idx, block_size),
+                                      args=(block_start_idx, min(block_start_idx + block_size, n_atoms)),
                                       callback=callback_fn,
                                       error_callback=error_callback_fn)   
             pending.append(result)
@@ -158,7 +152,7 @@ def run_parallel(pharmit_path: Path,
         pool.join()
 
     print(f"Processing completed with {error_counter[0]} errors.")
-    return torch.unique(torch.cat(all_unique_feats, dim=0), dim=0)
+    return global_unique_feats
 
 
 
@@ -167,32 +161,33 @@ def run_single(pharmit_path: Path,
                block_size: int,
                output_dir: Path):
 
-    # Load Pharmit dataset (also needed for number of ligands)
-    global pharmit_dataset
+    global atom_types, atom_charges, extra_feats
+    global global_unique_feats
 
-    cfg = quick_load.load_cfg(overrides=['task_group=no_protein_extra_feats'], pharmit_path=pharmit_path)
-    datamodule = datamodule_from_config(cfg)
-    dataset = datamodule.load_dataset(store_name)
-    pharmit_dataset = dataset.datasets['pharmit']
+    store_path = store_path = pharmit_path+'/'+store_name+'.zarr'
+    root = zarr.open(store_path, mode='r+')
+    lig_node_group = root['lig/node']
+    atom_types = lig_node_group['a']
+    atom_charges = lig_node_group['c']
+    extra_feats = lig_node_group['extra_feats']
 
-    n_mols = len(pharmit_dataset)
-    n_blocks = (n_mols + block_size - 1) // block_size
+    n_atoms = atom_types.shape[0]
+    n_blocks = (n_atoms + block_size - 1) // block_size
 
     print(f"Pharmit zarr store will be processed in {n_blocks} blocks.\n")
 
     pbar = tqdm(total=n_blocks, desc="Processing", unit="blocks")
     error_counter = [0]   # simple error counter
 
-    all_unique_feats = []
-
     for block_idx in range(n_blocks):
         block_start_idx = block_idx * block_size      
         try:
-            result = process_pharmit_block(block_start_idx, block_size)
-            all_unique_feats.append(result)
+            result = process_pharmit_block(block_start_idx, min(block_start_idx + block_size, n_atoms))
+            global_unique_feats = torch.unique(torch.cat([global_unique_feats, result], dim=0), dim=0)
 
-            print(f"{torch.unique(torch.cat(all_unique_feats, dim=0), dim=0).shape[0]} unique features found.")
-            print(f"––––––––––––––––––––––––––––––––––––––––––")
+            print(f"{global_unique_feats.shape[0]} unique atom feature tuples found so far.")
+            print(f"––––––––––––––––––––––––––––––––––")
+
         except Exception as e:
             print(f"Error processing block {block_idx}: {e}")
             error_log_path = output_dir / 'error_log.txt'
@@ -205,13 +200,12 @@ def run_single(pharmit_path: Path,
                     traceback.print_exception(type(e), e, e.__traceback__, file=f)
                     error_counter[0] += 1
 
-
         pbar.update(1)
 
     pbar.close()
 
     print(f"Processing completed with {error_counter[0]} errors.")
-    return torch.unique(torch.cat(all_unique_feats, dim=0), dim=0)
+    return global_unique_feats
 
 
 if __name__ == '__main__':
@@ -223,9 +217,11 @@ if __name__ == '__main__':
     start_time = time.time()
 
     if args.n_cpus == 1:
-        result= run_single(args.pharmit_path, args.store_name, args.block_size, args.output_dir)
+        result = run_single(args.pharmit_path, args.store_name, args.block_size, args.output_dir)
     else:
         result = run_parallel(args.pharmit_path, args.store_name, args.block_size, args.n_cpus, args.output_dir)
+
+    torch.save(result, args.output_dir+'/unique_feature_tuples.pt')
 
     end_time = time.time()
 
