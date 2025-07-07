@@ -4,6 +4,8 @@ from pathlib import Path
 
 import torch
 import numpy as np
+import json
+from omegaconf import OmegaConf
 
 from rdkit.Chem import rdMolAlign
 from omtra.load.quick import datamodule_from_config
@@ -13,27 +15,42 @@ import omtra.load.quick as quick_load
 from zarr_helpers import init_zarr_store_latents 
 from utils import get_gt_as_rdkit_ligand, find_rigid_alignment
 
-cfg = quick_load.load_cfg(overrides=['task_group=no_protein']) # you can provide overrides to the default config via command-line syntax here
-datamodule = datamodule_from_config(cfg)
-train_dataset = datamodule.load_dataset("val")
-pharmit_dataset = train_dataset.datasets['pharmit']
+# Configuration; 
+# includes things such as :
+# 1) how we run inference (eg. sampling steps)
+# 2) how and where to save the latents (eg. # of chunks, output path)
+# 3) which model & dataset was used
 
-batch_size = 32
-num_total_samples = 128 #len(pharmit_dataset) # 512changed for testing
-ckpt_path = '/home/ruh/Research/OMTRA/models/batch_295000.ckpt'
+cfg = {
+    'source_split': 'val',
+    'task_name': 'ligand_conformer', 
+    'dataset_name': 'pharmit',
+    'generation': {
+        'n_timesteps': 200,
+        'n_replicates': 1,
+        'unconditional_n_atoms_dist': 'pharmit'
+    },
+    'batch_size': 64,
+    'num_total_samples': 128,  # len(pharmit_dataset) for full dataset
+    'ckpt_path': '/home/ruh/Research/OMTRA/models/batch_295000.ckpt',
+    'output_zarr_path': Path("confidence_dataset.zarr"),
+    'n_zarr_chunks': 2
+}
 
-output_zarr_path = Path("confidence_dataset.zarr")
-n_zarr_chunks = 2
+hydra_cfg = quick_load.load_cfg(overrides=['task_group=no_protein']) # you can provide overrides to the default config via command-line syntax here
+datamodule = datamodule_from_config(hydra_cfg)
+train_dataset = datamodule.load_dataset(cfg['source_split'])
+pharmit_dataset = train_dataset.datasets[cfg['dataset_name']]
 
-model = quick_load.omtra_from_checkpoint(ckpt_path).cuda().eval()
+model = quick_load.omtra_from_checkpoint(cfg['ckpt_path']).cuda().eval()
 
 # Get the total number of atoms in the dataset
-graph_lookup = pharmit_dataset.slice_array('lig/node/graph_lookup', 0, num_total_samples)
+graph_lookup = pharmit_dataset.slice_array('lig/node/graph_lookup', 0, cfg['num_total_samples'])
 atom_counts_per_sample = graph_lookup[:, 1] - graph_lookup[:, 0]
 total_atoms = int(graph_lookup[-1, 1])  # idx of the last atom of the last sample
 
 dataset_spec = {
-    'n_mols' : num_total_samples,
+    'n_mols' : cfg['num_total_samples'],
     'n_atoms': total_atoms,
     'scalar_dim': model.vector_field.n_hidden_scalars,
     'vector_dim': model.vector_field.n_vec_channels
@@ -42,32 +59,53 @@ dataset_spec = {
 graph_lookup_table = build_lookup_table(atom_counts_per_sample)
 
 _, root = init_zarr_store_latents(
-    store_path=output_zarr_path, 
+    store_path=cfg['output_zarr_path'], 
     totals=dataset_spec,
-    n_chunks=n_zarr_chunks
+    n_chunks=cfg['n_zarr_chunks']
 )
 
 # Pre-populate the lookup table, as it's fully computed now
 root['metadata/graph_lookup'][:] = graph_lookup_table
 
+# resolve the configs of hydra and save a snapshot of it to read later
+resolved_datamodule_config = OmegaConf.to_container(hydra_cfg.task_group.datamodule, resolve=True)
+resolved_graph_config = OmegaConf.to_container(hydra_cfg.graph, resolve=True)
+resolved_prior_config = OmegaConf.to_container(hydra_cfg.prior, resolve=True)
+
+essential_config = {
+    'datamodule_config': resolved_datamodule_config,
+    'graph_config': resolved_graph_config,
+    'prior_config': resolved_prior_config,
+    'pharmit_path': str(hydra_cfg.pharmit_path),
+    'fake_atom_p': float(hydra_cfg.fake_atom_p),
+    'source_split': cfg['source_split'],
+    'task_name': cfg['task_name'],
+    'model_checkpoint': str(cfg['ckpt_path']),
+    'generation_config': cfg['generation']
+}
+
+# Save config as separate JSON file alongside Zarr store
+config_path = cfg['output_zarr_path'].with_suffix('.config.json')
+with open(config_path, 'w') as f:
+    json.dump(essential_config, f, indent=2)
 
 records = []
 delta = [] # evaluating how different kabsch_rmsd is to rdkit_rmsd
 
-for i in tqdm(range(0, num_total_samples, batch_size), desc="Processing Batches"): 
-    current_batch_idx = range(i, min(i + batch_size, num_total_samples))
+for i in tqdm(range(0, cfg['num_total_samples'], cfg['batch_size']), desc="Processing Batches"): 
+    current_batch_idx = range(i, min(i + cfg['batch_size'], cfg['num_total_samples']))
     
-    g_list = [] 
+    g_list = []  
     for dataset_idx in current_batch_idx:
-        g_list.append(pharmit_dataset[('ligand_conformer', dataset_idx)])
+        g_list.append(pharmit_dataset[(cfg['task_name'], dataset_idx)])
     
     sampled_systems = model.sample(
-        task_name='ligand_conformer',
+        task_name=cfg['task_name'],
         g_list=g_list,
         device="cuda",
-        n_replicates=1,
-        unconditional_n_atoms_dist='pharmit',
-        n_timesteps=200,
+        n_replicates=cfg['generation']['n_replicates'],
+        unconditional_n_atoms_dist=cfg['generation']['unconditional_n_atoms_dist'],
+        n_timesteps=cfg['generation']['n_timesteps'],
         visualize=True,
         extract_latents_for_confidence=True 
     )
