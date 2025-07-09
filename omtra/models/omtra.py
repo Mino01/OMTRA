@@ -67,6 +67,7 @@ class OMTRA(pl.LightningModule):
         og_run_dir: Optional[str] = None,
         fake_atom_p: float = 0.0,
         eval_config: Optional[DictConfig] = None,
+        zero_bo_loss_weight: float = 1.0,
     ):
         super().__init__()
 
@@ -82,6 +83,7 @@ class OMTRA(pl.LightningModule):
         self.eval_config = eval_config
         self.og_run_dir = og_run_dir
         self.fake_atom_p = fake_atom_p
+        self.zero_bo_loss_weight = zero_bo_loss_weight
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -204,8 +206,17 @@ class OMTRA(pl.LightningModule):
         # create loss functions for each modality
         for modality in modalities_generated:
             if modality.is_categorical:
+
+                if modality.name == 'lig_e' and self.zero_bo_loss_weight != 1.0:
+                    weights = torch.ones(modality.n_categories, dtype=torch.float)
+                    weights[0] = self.zero_bo_loss_weight
+                else:
+                    weights = None
+
                 self.loss_fn_dict[modality.name] = nn.CrossEntropyLoss(
-                    reduction=reduction, ignore_index=-100
+                    weights=weights,
+                    reduction=reduction, 
+                    ignore_index=-100
                 )
             else:
                 self.loss_fn_dict[modality.name] = nn.MSELoss(reduction=reduction)
