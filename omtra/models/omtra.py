@@ -66,7 +66,6 @@ class OMTRA(pl.LightningModule):
         checkpoint_interval: int = 1000,
         og_run_dir: Optional[str] = None,
         fake_atom_p: float = 0.0,
-        eval_config: Optional[DictConfig] = None,
     ):
         super().__init__()
 
@@ -79,7 +78,6 @@ class OMTRA(pl.LightningModule):
         self.conditional_path_config = conditional_paths
         self.optimizer_cfg = optimizer
         self.prior_config = prior_config
-        self.eval_config = eval_config
         self.og_run_dir = og_run_dir
         self.fake_atom_p = fake_atom_p
 
@@ -291,17 +289,9 @@ class OMTRA(pl.LightningModule):
         samples = self.sample(task_name, g_list=g_list, n_replicates=n_replicates, n_timesteps=200, device=device, coms=coms)
         samples = [s.to("cpu") for s in samples if s is not None]
         
-        if not self.eval_config:
-            self.train()
-            return 0.0
-        
-        metrics = {}
-        for eval in self.eval_config.get(task_name, []):
-            for eval_name, config  in eval.items():
-                if not config.get("train", False):
-                    continue
-                eval_fn = get_eval(eval_name)
-                metrics.update(eval_fn(samples, config.get("params", {})))
+        # TODO: compute evals and log them / do we want to log them separately for each task?
+        eval_fn = get_eval(task_name)
+        metrics = eval_fn(samples)
         
         if metrics:
             metrics = add_task_prefix(metrics, task_name)
