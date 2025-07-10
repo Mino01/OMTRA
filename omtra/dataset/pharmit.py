@@ -83,10 +83,12 @@ class PharmitDataset(ZarrDataset):
         if include_extra_feats:
             # Get extra ligand atom features as a dictionary
             extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
-            extra_feats_dict = {}
-            for col_idx, feat in enumerate(self.root['lig/node/extra_feats'].attrs.get('features', [])): 
+            features = self.root['lig/node/extra_feats'].attrs.get('features', [])
+
+            # Iterate over all but the last feature
+            for col_idx, feat in enumerate(features[:-1]):
                 col_data = extra_feats[:, col_idx]         
-                extra_feats_dict[feat] = torch.from_numpy(col_data).long()
+                xace_dict[feat] = torch.from_numpy(col_data).long()
             
         # get slice indicies for ligand-ligand edges
         edge_slice_idxs = self.slice_array('lig/edge/graph_lookup', idx)
@@ -99,7 +101,8 @@ class PharmitDataset(ZarrDataset):
 
         # convert to torch tensors and set data types
         for k in xace_dict:
-            xace_dict[k] = torch.from_numpy(xace_dict[k])
+            if isinstance(xace_dict[k], np.ndarray):
+                xace_dict[k] = torch.from_numpy(xace_dict[k])
             if k == 'x':
                 xace_dict[k] = xace_dict[k].float()
             else:
@@ -119,20 +122,28 @@ class PharmitDataset(ZarrDataset):
         lig_c = torch.searchsorted(charge_map_tensor, xace_ligand.c)
 
         # construct inputs to graph building function
-        g_node_data = {
-            'lig': {
-                'x_1_true': xace_ligand.x, 
-                'a_1_true': xace_ligand.a,
-                'c_1_true': lig_c
-                },
-        }
-
         if include_extra_feats:
-            g_node_data['lig']['impl_H_1_true'] = extra_feats_dict['impl_H']
-            g_node_data['lig']['aro_1_true'] = extra_feats_dict['aro']
-            g_node_data['lig']['hyb_1_true'] = extra_feats_dict['hyb']
-            g_node_data['lig']['ring_1_true'] = extra_feats_dict['ring']
-            g_node_data['lig']['chiral_1_true'] = extra_feats_dict['chiral']
+            g_node_data = {
+                'lig': {
+                    'x_1_true': xace_ligand.x, 
+                    'a_1_true': xace_ligand.a,
+                    'c_1_true': lig_c,
+                    'impl_H_1_true': xace_ligand.impl_H,
+                    'aro_1_true': xace_ligand.aro,
+                    'hyb_1_true': xace_ligand.hyb,
+                    'ring_1_true': xace_ligand.ring,
+                    'chiral_1_true': xace_ligand.chiral
+                    },
+            }
+        
+        else:
+            g_node_data = {
+                'lig': {
+                    'x_1_true': xace_ligand.x, 
+                    'a_1_true': xace_ligand.a,
+                    'c_1_true': lig_c
+                    },
+            }
 
         g_edge_data = {
             'lig_to_lig': {

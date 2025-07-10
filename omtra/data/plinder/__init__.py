@@ -85,12 +85,20 @@ class LigandData:
             'edge_idxs': self.bond_indices,
         }
 
+        if self.atom_impl_H is not None:
+            xace_dict['impl_H'] = self.atom_impl_H
+            xace_dict['aro'] = self.atom_aro
+            xace_dict['hyb'] = self.atom_hyb
+            xace_dict['ring'] = self.atom_ring
+            xace_dict['chiral'] = self.atom_chiral
+
         if self.bond_types is None or self.bond_indices is None:
             xace_dict['e'] = torch.zeros((0,), dtype=torch.long)
             xace_dict['edge_idxs'] = torch.zeros((2, 0), dtype=torch.long)
 
         for k in xace_dict:
-            xace_dict[k] = torch.from_numpy(xace_dict[k])
+            if isinstance(xace_dict[k], np.ndarray):
+                xace_dict[k] = torch.from_numpy(xace_dict[k])
             if k == 'x':
                 xace_dict[k] = xace_dict[k].float()
             else:
