@@ -16,7 +16,44 @@ denovo_ligand:
       train: true
       params:
         threshold_flatness: 0.1
+denovo_ligand_extra_feats:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
 ligand_conformer:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+ligand_conformer_extra_feats:
   - stability:
       train: true
       params: {}
