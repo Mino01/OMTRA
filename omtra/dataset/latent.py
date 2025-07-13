@@ -1,6 +1,7 @@
 import dgl
 import torch
 import numpy as np
+import warnings
 
 import json
 from omegaconf import OmegaConf, DictConfig
@@ -63,6 +64,19 @@ class LatentDataset(ZarrDataset):
             fake_atom_p=saved_config['fake_atom_p'],
             **single_dataset_config
         )
+        
+        # Check latent dataset size consistency with its original dataset
+        if len(self) > len(self.original_dataset):
+            raise AssertionError(
+                f"Latent dataset has more examples than the original {self.dataset_name} dataset! "
+                f"This indicates a bug in latent generation ({len(self)} > {len(self.original_dataset)} samples)."
+            )
+        elif len(self) < len(self.original_dataset):
+            warnings.warn(
+                f"Your latent dataset has less examples than the {self.dataset_name} dataset has. "
+                f"Likely you saved only a subset ({len(self)} < {len(self.original_dataset)} samples).",
+                UserWarning
+            )
 
     def obtain_config(self, processed_data_dir, split):
         # Look for config file associated with Zarr store
