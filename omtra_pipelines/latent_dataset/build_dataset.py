@@ -72,7 +72,6 @@ resolved_datamodule_config = OmegaConf.to_container(hydra_cfg.task_group.datamod
 
 essential_config = {
     'datamodule_config': resolved_datamodule_config,
-    'pharmit_path': str(hydra_cfg.pharmit_path),
     'fake_atom_p': float(hydra_cfg.fake_atom_p),
     'source_split': cfg['source_split'],
     'task_name': cfg['task_name'],
