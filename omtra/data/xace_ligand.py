@@ -132,7 +132,6 @@ class MoleculeTensorizer():
 
 def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], explicit_hydrogens=False) -> MolXACE:
     """Converts an RDKit molecule to a MolXACE data class containing the positions, atom types, atom charges, bond types, bond indexes, and unique valencies."""
-    # TODO: edit to include extra features 
     try:
         Chem.SanitizeMol(molecule)
         Chem.Kekulize(molecule, clearAromaticFlags=True)
@@ -228,12 +227,14 @@ def add_fake_atoms(mol: MolXACE, fake_atom_p: float):
     mol.a = torch.cat((mol.a, fake_atom_types), dim=0)
     mol.c = torch.cat((mol.c, fake_atom_charges), dim=0)
 
+    
     if mol.impl_H is not None:
-        for extra_feat, n_cats in extra_feats_map.items():
-            fake_atom_feats = torch.full_like(mol.a[anchor_atom_idxs], fill_value=n_cats)
+        for extra_feat in extra_feats_map.keys():
             old_feat = getattr(mol, extra_feat)     # Old atom extra features
+            fake_atom_feats = torch.zeros_like(old_feat[anchor_atom_idxs])
             new_feat = torch.cat((old_feat, fake_atom_feats), dim=0)    
             setattr(mol, extra_feat, new_feat)      # Add fake atom extra features
+    
     return mol
 
 

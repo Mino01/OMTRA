@@ -57,10 +57,8 @@ def compute_validity(
                 error_messages['no error'] += 1
             except Chem.rdchem.AtomValenceException:
                 error_messages['AtomValence'] += 1
-                # print("Valence error in GetmolFrags")
             except Chem.rdchem.KekulizeException:
                 error_messages['Kekulize'] += 1
-                # print("Can't kekulize molecule")
             except Exception as e:
                 error_messages['other'] += 1
     

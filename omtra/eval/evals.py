@@ -49,7 +49,13 @@ def geometry(
     metric_values = defaultdict(list)
     for i, sys in enumerate(sampled_systems):
         mol_pred = sys.get_rdkit_ligand()
-        res = check_geometry(mol_pred=mol_pred, **params)
+
+        try:
+            res = check_geometry(mol_pred=mol_pred, **params)
+        except Exception as e:
+            print(f"check_geometry failed for molecule {i}: {e}")
+            continue
+
         res = res.get("results", {})
         number_bonds = res.get("number_bonds", -1)
         number_angles = res.get("number_angles", -1)
