@@ -32,7 +32,7 @@ cfg = {
     },
     'batch_size': 64,
     'num_total_samples': 128,  # len(pharmit_dataset) for full dataset
-    'ckpt_path': '/home/ruh/Research/OMTRA/models/batch_295000.ckpt',
+    'ckpt_path': '../../models/batch_295000.ckpt',
     'output_zarr_path': Path("confidence_dataset.zarr"),
     'n_zarr_chunks': 2
 }

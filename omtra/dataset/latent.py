@@ -43,7 +43,7 @@ class LatentDataset(ZarrDataset):
         super().__init__(split, processed_data_dir)
 
         # Load the saved config (.json resides alongside the Zarr store)
-        saved_config, datamodule_config, graph_config, prior_config = self.obtain_config(processed_data_dir, split)
+        saved_config, datamodule_config, graph_config, prior_config = self.obtain_config()
 
         # Extract dataset info from the saved datamodule config
         single_dataset_configs = datamodule_config.dataset_config.single_dataset_configs
@@ -78,7 +78,7 @@ class LatentDataset(ZarrDataset):
                 UserWarning
             )
 
-    def obtain_config(self, processed_data_dir, split):
+    def obtain_config(self):
         # Load config from Zarr store attributes
         saved_config = dict(self.root.attrs['config'])
         
@@ -106,10 +106,6 @@ class LatentDataset(ZarrDataset):
         # Get latent data
         atom_start, atom_end = self.slice_array('metadata/graph_lookup', index)
         
-        # Load metrics
-        rdkit_rmsd = self.slice_array('metrics/rdkit_rmsd', index)
-        kabsch_rmsd = self.slice_array('metrics/kabsch_rmsd', index)
-        
         # Load latent features
         scalar_features = self.slice_array('latents/node_scalar_features', atom_start, atom_end)
         vec_features = self.slice_array('latents/node_vec_features', atom_start, atom_end)
@@ -126,11 +122,11 @@ class LatentDataset(ZarrDataset):
         original_graph.nodes['lig'].data['coords_gt'] = torch.from_numpy(coords_gt)
         original_graph.nodes['lig'].data['coords_pred'] = torch.from_numpy(coords_pred)
         
-        # store precomputed metrics (rmsd etc.) as system features
-        system_features = {
-            'rdkit_rmsd': torch.from_numpy(rdkit_rmsd).float(),
-            'kabsch_rmsd': torch.from_numpy(kabsch_rmsd).float()
-        }
+        # load available metrics (gt calculations)
+        system_features = {}
+        for metric_name in self.root['metrics'].keys():
+            metric_value = self.slice_array(f'metrics/{metric_name}', index)
+            system_features[metric_name] = torch.from_numpy(metric_value).float()
 
         return_dict = {
             'graph': original_graph,
