@@ -1,6 +1,8 @@
 import dgl
 import torch
 from typing import Tuple, List, Union, Dict
+from pathlib import Path
+import omtra.constants as constants
 from omtra.constants import (
     lig_atom_type_map,
     npnde_atom_type_map,
@@ -14,14 +16,19 @@ from rdkit import Chem, RDLogger
 from rdkit.Geometry import Point3D
 import numpy as np
 import biotite.structure as struc
+from biotite.interface import rdkit as bt_rdkit
 from copy import deepcopy
 from omtra.tasks.modalities import name_to_modality
 from collections import defaultdict
+from omtra.tasks.register import task_name_to_class
 
 from omtra.data.graph.utils import (
     copy_graph,
     get_upper_edge_mask,
 )
+
+from biotite.structure.io.pdbx import CIFFile
+import biotite.structure as struc
 
 
 class SampledSystem:
@@ -56,6 +63,11 @@ class SampledSystem:
         self.bond_type_map = bond_type_map
         self.charge_map = charge_map
         self.protein_element_map = protein_element_map
+        self._cached_protein_array = None
+        
+        self.rdkit_ligand = None
+        self.rdkit_ref_ligand = None
+        self.rdkit_protein = None
 
         if self.fake_atoms:
             self.ligand_atom_type_map = deepcopy(self.ligand_atom_type_map)
@@ -76,6 +88,12 @@ class SampledSystem:
 
     def get_n_lig_atoms(self) -> int:
         n_lig_atoms = self.g.num_nodes(ntype="lig")
+        if self.fake_atoms:
+            fake_atom_token_idx  = self.ligand_atom_type_map.index('Sn')
+            atom_type_idxs = self.g.nodes['lig'].data['a_1']
+            fake_atom_mask = atom_type_idxs == fake_atom_token_idx
+            n_fake_atoms = fake_atom_mask.sum().item()
+            n_lig_atoms -= n_fake_atoms
         return n_lig_atoms
 
     def get_atom_arr(self, reference: bool = False):
@@ -277,6 +295,7 @@ class SampledSystem:
         chain_id,
         hetero,
         charge=None,
+        include_bonds: bool = True,
         bond_src_idxs=None,
         bond_dst_idxs=None,
         bond_types=None,
@@ -296,6 +315,10 @@ class SampledSystem:
         if charge is not None:
             # TODO: why is this a generator object ?
             atom_array.set_annotation("charge", charge)
+        
+        if not include_bonds:
+            return atom_array
+        
         if (
             bond_src_idxs is not None
             and bond_dst_idxs is not None
@@ -304,11 +327,14 @@ class SampledSystem:
             bond_list = self.build_bond_list(bond_src_idxs, bond_dst_idxs, bond_types, atom_array.array_length())
             atom_array.bonds = bond_list
         else:
-            atom_array.bonds = struc.connect_via_distances(atom_array)
+            atom_array.bonds = struc.connect_via_distances(self.get_protein_array(reference=True, include_bonds=False))
             
         return atom_array
 
-    def get_protein_array(self, g=None, reference: bool = False):
+    def get_protein_array(self, g=None, reference: bool = False, include_bonds: bool = True):
+        if g is None and reference and include_bonds:
+            if self._cached_protein_array is not None:
+                return self._cached_protein_array
         coords, atom_names, elements, res_ids, res_names, chain_ids, hetero = (
             self.extract_protdata_from_graph(g=g, reference=reference)
         )
@@ -320,13 +346,45 @@ class SampledSystem:
             res_name=res_names,
             chain_id=chain_ids,
             hetero=hetero,
+            include_bonds=include_bonds,
         )
+        if g is None and reference and include_bonds:
+            self._cached_protein_array = arr
         return arr
 
     def get_rdkit_ligand(self) -> Union[None, Chem.Mol]:
+        if self.rdkit_ligand is not None:
+            return self.rdkit_ligand
         ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol)
         rdkit_mol = self.build_molecule(*ligdata)
+        self.rdkit_ligand = rdkit_mol
         return rdkit_mol
+    
+    def get_gt_ligand(self, g=None):
+        if g is None:
+            g_dummy = self.g.clone()
+        else:
+            g_dummy = g.clone()
+        g_dummy = move_feats_to_t1('denovo_ligand', g_dummy, t="1_true")
+        ligdata = self.extract_ligdata_from_graph(g=g_dummy, ctmc_mol=self.ctmc_mol)
+        rdkit_mol = self.build_molecule(*ligdata)
+        return rdkit_mol
+    
+    def get_rdkit_ref_ligand(self) -> Union[None, Chem.Mol]:
+        if self.rdkit_ref_ligand is not None:
+            return self.rdkit_ref_ligand
+        ligdata = self.extract_ligdata_from_graph(ctmc_mol=self.ctmc_mol, ref=True)
+        rdkit_mol = self.build_molecule(*ligdata)
+        self.rdkit_ref_ligand = rdkit_mol
+        return rdkit_mol
+    
+    def get_rdkit_protein(self):
+        if self.rdkit_protein is not None:
+            return self.rdkit_protein
+        prot_arr = self.get_protein_array()
+        prot_mol = bt_rdkit.to_mol(prot_arr)
+        self.rdkit_protein = prot_mol
+        return prot_mol
 
     def convert_ligdata_to_biotite(
         self,
@@ -373,6 +431,7 @@ class SampledSystem:
         ctmc_mol: bool = False,
         show_fake_atoms: bool = False,
         npnde: bool = False,
+        ref: bool = False
     ) -> Tuple[torch.Tensor, List[str], List[int], torch.Tensor, torch.Tensor, torch.Tensor]:
         if g is None:
             g = self.g
@@ -401,7 +460,11 @@ class SampledSystem:
             lig_g.remove_nodes(fake_atom_idxs)
 
         # extract node-level features
-        positions: torch.Tensor = lig_g.ndata["x_1"]
+        if ref:
+            positions: torch.Tensor = lig_g.ndata["x_1_true"].clone()
+        else:
+            positions: torch.Tensor = lig_g.ndata["x_1"]
+            
         atom_types = lig_g.ndata["a_1"]
         atom_types: List[str] = [atom_type_map[int(atom)] for atom in atom_types]
 
@@ -455,33 +518,23 @@ class SampledSystem:
         else:
             feat_suffix = "1"
 
-        coords = self.g.nodes["prot_atom"].data[f"x_{feat_suffix}"].numpy()
-        atypes = self.g.nodes["prot_atom"].data[f"a_1_true"].numpy()
+        coords = g.nodes["prot_atom"].data[f"x_{feat_suffix}"].numpy()
+        atypes = g.nodes["prot_atom"].data[f"a_1_true"].numpy()
         atom_type_map_array = np.array(self.protein_atom_type_map, dtype="U3")
         atom_names = atom_type_map_array[atypes]
 
-        eltypes = self.g.nodes["prot_atom"].data[f"e_1_true"].numpy()
+        eltypes = g.nodes["prot_atom"].data[f"e_1_true"].numpy()
         element_type_map_array = np.array(self.protein_element_map, dtype="U2")
         elements = element_type_map_array[eltypes]
 
-        res_ids = self.g.nodes["prot_atom"].data["res_id"].numpy()
-        res_types = self.g.nodes["prot_atom"].data["res_names"].numpy()
+        res_ids = g.nodes["prot_atom"].data["res_id"].numpy()
+        res_types = g.nodes["prot_atom"].data["res_names"].numpy()
         res_type_map_array = np.array(self.residue_map, dtype="U3")
         res_names = res_type_map_array[res_types]
 
-        chain_ids = self.g.nodes["prot_atom"].data["chain_id"].numpy()
+        chain_ids = g.nodes["prot_atom"].data["chain_id"].numpy()
         hetero = np.full_like(atom_names, False, dtype=bool)
         return coords, atom_names, elements, res_ids, res_names, chain_ids, hetero
-
-    def extract_pharm_from_graph(self, g=None):
-        if g is None:
-            g = self.g
-
-        coords = g.nodes["pharm"].data["x_1_true"].numpy()
-        pharm_types = g.nodes["pharm"].data["a_1_true"].numpy()
-        pharm_vecs = g.nodes["pharm"].data["v_1_true"].numpy()
-
-        return coords, pharm_types, pharm_vecs
 
     def build_molecule(
         self,
@@ -527,13 +580,6 @@ class SampledSystem:
     def build_traj(self, ep_traj=False, lig=True, prot=False, pharm=False):
         if self.traj is None:
             raise ValueError("No trajectory data available.")
-
-        if pharm:
-            raise NotImplementedError(
-                "Pharmacophore trajectory building not implemented yet."
-            )
-        if prot:
-            print("warning: protein trajectory building being tested")
 
         if not any([lig, prot, pharm]):
             raise ValueError("at least one of lig, prot, or pharm must be True.")
@@ -585,8 +631,92 @@ class SampledSystem:
             if prot:
                 bt_arr = self.get_protein_array(g=g_dummy)
                 traj_mols["prot"].append(bt_arr)
+
+            if pharm:
+                traj_mols['pharm'].append(self.get_pharmacophore_from_graph(g=g_dummy, kind="predicted"))
                 
         return traj_mols
+    
+    def get_pharmacophore_from_graph(self, g=None, kind="predicted", xyz=False):
+        if g is None:
+            g = self.g
+
+        if kind == "predicted":
+            suffix = "1"
+        elif kind == 'gt':
+            suffix = "1_true"
+        else:
+            raise ValueError("kind must be either 'predicted' or 'gt'.")
+
+        coords = g.nodes['pharm'].data[f'x_{suffix}'].numpy()
+        pharm_types_idx = g.nodes['pharm'].data[f'a_{suffix}'].numpy().tolist()
+        pharm_types = [ constants.ph_idx_to_type[idx] for idx in pharm_types_idx ]
+        pharm_types_elems = [ constants.ph_idx_to_elem[idx] for idx in pharm_types_idx ] 
+
+        if xyz:
+            return pharm_to_xyz(coords, pharm_types_elems)
+        else:
+            return {
+                'coords': coords,
+                'types': pharm_types,
+                'types_idx': pharm_types_idx,
+                'types_elems': pharm_types_elems,
+            }
+    
+    def write_ligand(self, output_file: str, 
+                     trajectory: bool = False, 
+                     endpoint: bool = False, 
+                     ground_truth: bool = True,
+                     g = None):
+        """Write a ligand or a ligand trajectory to an sdf file."""
+        output_file = Path(output_file)
+        if not output_file.suffix == ".sdf":
+            raise ValueError("Output file must have .sdf extension.")
+        if trajectory:
+            mols = self.build_traj(ep_traj=endpoint, lig=True)['lig']
+        elif ground_truth:
+            mols = [self.get_gt_ligand(g=g)]
+        else:
+            mols = [self.get_rdkit_ligand()]
+        write_mols_to_sdf(mols, str(output_file))
+
+    def write_protein(self, 
+            output_file: str, 
+            trajectory: bool = False, 
+            endpoint: bool = False,
+            ground_truth: bool = False
+        ):
+        """Write a protein or a protein trajectory to a cif file."""
+        output_file = Path(output_file)
+        if not output_file.suffix == ".cif":
+            raise ValueError("Output file must have .cif extension.")
+        if trajectory:
+            arrs = self.build_traj(ep_traj=endpoint, prot=True)['prot']
+        else:
+            arrs = [self.get_protein_array(reference=ground_truth)]
+        write_arrays_to_cif(arrs, str(output_file))
+
+    def write_pharmacophore(self, 
+        output_file, 
+        trajectory: bool = False, 
+        endpoint: bool = False,
+        ground_truth: bool = False,
+        g=None):
+
+        output_file = Path(output_file)
+        if not output_file.suffix == ".xyz":
+            raise ValueError("Output file must have .xyz extension.")
+        
+        if trajectory:
+            pharms = self.build_traj(ep_traj=endpoint, pharm=True)['pharm']
+            pharms = [ pharm_to_xyz(pharm['coords'], pharm['types_elems']) for pharm in pharms ]
+        else:
+            kind = 'gt' if ground_truth else 'predicted'
+            pharms = [self.get_pharmacophore_from_graph(g=g, kind=kind, xyz=True)]
+
+        xyz_content =''.join(pharms)
+        with open(output_file, 'w') as f:
+            f.write(xyz_content)
 
     def compute_valencies(self):
         """Compute the valencies of every atom in the molecule. Returns a tensor of shape (num_atoms,)."""
@@ -602,3 +732,51 @@ class SampledSystem:
         adj[bond_dst_idxs, bond_src_idxs] = adjusted_bond_types
         valencies = torch.sum(adj, dim=-1).long()
         return valencies
+
+def write_arrays_to_cif(arrays, filename):
+    cif_file = CIFFile()
+    arr_stack = struc.stack(arrays)
+    struc.io.pdbx.set_structure(cif_file, arr_stack)
+    cif_file.write(filename)
+
+
+def pharm_to_xyz(pos: torch.Tensor, pharm_elements: List[str]):
+    out = f'{len(pos)}\n'
+    for i in range(len(pos)):
+        elem = pharm_elements[i]
+        out += f"{elem} {pos[i, 0]:.3f} {pos[i, 1]:.3f} {pos[i, 2]:.3f}\n"
+    return out
+
+
+def write_mols_to_sdf(mols: List[Chem.Mol], filename: Union[str, Path]):
+    """Write a list of rdkit molecules to an sdf file."""
+    filename = Path(filename)
+    if not filename.suffix == ".sdf":
+        raise ValueError("Output file must have .sdf extension.")
+    sdwriter = Chem.SDWriter(str(filename))
+    sdwriter.SetKekulize(False)
+    for mol in mols:
+        if mol is not None:
+            sdwriter.write(mol)
+    sdwriter.close()
+
+def move_feats_to_t1(task_name: str, g: dgl.DGLHeteroGraph, t: str = '0'):
+    task = task_name_to_class(task_name)
+    for m in task.modalities_present:
+
+        num_entries = g.num_nodes(m.entity_name) if m.is_node else g.num_edges(m.entity_name)
+        if num_entries == 0:
+            continue
+
+        data_src = g.nodes if m.is_node else g.edges
+        dk = m.data_key
+        en = m.entity_name
+
+        if t == '0' and m in task.modalities_fixed:
+            data_to_copy = data_src[en].data[f'{dk}_1_true']
+        else:
+            data_to_copy = data_src[en].data[f'{dk}_{t}']
+
+        data_src[en].data[f'{dk}_1'] = data_to_copy
+
+    return g
