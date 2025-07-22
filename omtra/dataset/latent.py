@@ -79,12 +79,8 @@ class LatentDataset(ZarrDataset):
             )
 
     def obtain_config(self, processed_data_dir, split):
-        # Look for config file associated with Zarr store
-        zarr_path = Path(processed_data_dir) / split
-        config_path = zarr_path.with_suffix('.config.json')
-        
-        with open(config_path, 'r') as f:
-            saved_config = json.load(f)
+        # Load config from Zarr store attributes
+        saved_config = dict(self.root.attrs['config'])
         
         # Convert resolved configs back to DictConfig
         datamodule_config = OmegaConf.create(saved_config['datamodule_config'])

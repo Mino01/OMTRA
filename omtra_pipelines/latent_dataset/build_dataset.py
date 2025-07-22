@@ -82,10 +82,8 @@ essential_config = {
     'generation_config': cfg['generation']
 }
 
-# Save config as separate JSON file alongside Zarr store
-config_path = cfg['output_zarr_path'].with_suffix('.config.json')
-with open(config_path, 'w') as f:
-    json.dump(essential_config, f, indent=2)
+# Save config inside Zarr store as root attributes
+root.attrs['config'] = essential_config
 
 records = []
 delta = [] # evaluating how different kabsch_rmsd is to rdkit_rmsd
