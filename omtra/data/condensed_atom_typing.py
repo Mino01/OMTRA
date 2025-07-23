@@ -2,7 +2,7 @@ import numpy as np
 import pickle
 
 from omtra.utils import omtra_root
-from omtra.constants import lig_atom_type_map
+from omtra.constants import lig_atom_type_map, charge_map, extra_feats_map
 
 
 class CondensedAtomTyper():
@@ -15,14 +15,14 @@ class CondensedAtomTyper():
         
         self.cond_a_list = sorted(list(cond_a_counts.keys()))
         self.fake_atoms = fake_atoms
-        self.lig_feats = ['a', 'c', 'impl_H', 'aro', 'hyb', 'ring', 'chiral']
+        self.lig_feats = ['a', 'c'] + list(extra_feats_map.keys())
 
         if self.fake_atoms:
-            self.fake_atom_tuple = (len(lig_atom_type_map),) + (0,) * (len(self.cond_a_list[0])- 1)
-            self.masked_atom_tuple = (len(lig_atom_type_map)+1,) + (0,) * (len(self.cond_a_list[0])- 1)
+            self.fake_atom_tuple = (len(lig_atom_type_map),) + (0,) * (len(self.lig_feats)- 1)
+            self.masked_atom_tuple = (len(lig_atom_type_map)+1, len(charge_map), ) + tuple(extra_feats_map.values())
         else:
             self.fake_atom_tuple = None
-            self.masked_atom_tuple = (len(lig_atom_type_map),) + (0,) * (len(self.cond_a_list[0])- 1)
+            self.masked_atom_tuple = (len(lig_atom_type_map), len(charge_map), ) + tuple(extra_feats_map.values())
 
         
     def feats_to_cond_a(self,
@@ -83,4 +83,8 @@ class CondensedAtomTyper():
         for i, feat in enumerate(self.lig_feats):
             lig_feat_dict[feat] = lig_feat_tuples[:, i]
         
+        # convert charges to token indicies
+        charge_map_array = np.array(charge_map)
+        lig_feat_dict['c'] = np.searchsorted(charge_map_array, lig_feat_dict['c'])
+
         return lig_feat_dict
