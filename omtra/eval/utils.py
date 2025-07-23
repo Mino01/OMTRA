@@ -71,15 +71,17 @@ def compute_validity(
     frac_valid_mols = n_valid / len(sampled_systems)
 
     # TODO: often frag_fracs/num_components is empty because all atoms are fake. Maybe indicates an architecture issue and we don't need these checks
+
     if frag_fracs:
         avg_frag_frac = sum(frag_fracs) / len(frag_fracs)
-    else: 
-         avg_frag_frac = 0.0
+    else:
+        avg_frag_frac = 0.0
     
     if num_components:
         avg_num_components = sum(num_components) / len(num_components)
     else:
         avg_num_components = 0.0
+    
 
     if return_counts:
         metrics = {
@@ -113,9 +115,13 @@ def compute_stability(sampled_systems: List[SampledSystem]):
         n_stable_atoms += n_stable_atoms_this_mol
         n_stable_molecules += int(mol_stable)
 
-    frac_atoms_stable = (
-        n_stable_atoms / n_atoms
-    )  # the fraction of generated atoms that have valid valencies
+    if n_atoms == 0:
+        frac_atoms_stable = 0.0
+    else:
+        frac_atoms_stable = (
+            n_stable_atoms / n_atoms
+        )  # the fraction of generated atoms that have valid valencies
+        
     frac_mols_stable_valence = (
         n_stable_molecules / n_molecules
     )  # the fraction of generated molecules whose atoms all have valid valencies
