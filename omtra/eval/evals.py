@@ -227,3 +227,41 @@ def pb_valid_unconditional(
         metrics['pb_valid'] = n_pb_valid / len(sampled_systems) 
     
     return metrics
+
+
+@register_eval("pb_valid_pocket")
+def pb_valid_pocket(
+    sampled_systems: List[SampledSystem], params: Dict[str, Any]
+) -> Dict[str, Any]:
+    
+    metrics = {}
+    
+    valid_rdmols = []
+    valid_receptors = []
+
+    for i, sys in enumerate(sampled_systems):
+        mol_pred = sys.get_rdkit_ligand()
+        receptor = sys.get_rdkit_protein()
+       
+        try:
+            Chem.SanitizeMol(mol_pred)
+
+            if mol_pred.GetNumAtoms() > 0:
+                valid_rdmols.append(mol_pred)
+                valid_receptors.append(receptor)
+            else:
+                print("PoseBusters valid check: Found molecule with no atoms valid check.")
+        except Exception as e:
+            print("PoseBusters valid check: Molecule failed to sanitize.")
+            
+    
+    if len(valid_rdmols) == 0:
+        metrics['pb_valid_pocket'] = 0.0
+
+    else:
+        buster = pb.PoseBusters(config="complex", **params)
+        df_pb = buster.bust(valid_rdmols, valid_receptors, None)
+        n_pb_valid = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1).sum()
+        metrics['pb_valid_pocket'] = n_pb_valid / len(sampled_systems) 
+    
+    return metrics
