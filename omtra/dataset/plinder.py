@@ -30,7 +30,7 @@ from omtra.data.plinder import (
     SystemData,
     BackboneData,
 )
-from omtra.data.distributions.utils import residue_sinusoidal_encoding
+from omtra.utils.embedding import residue_sinusoidal_encoding
 from typing import List, Dict, Tuple, Any, Optional
 import pandas as pd
 import numpy as np
@@ -942,16 +942,18 @@ class PlinderDataset(ZarrDataset):
             task=task_class,
             graph_config=self.graph_config,
         )
-        '''
+
         # standardize residue ids (ensure all residue ids start at 0 across chains)
         # node_data contains chain_ds, and prot_res_ids
         prot_res_ids = node_data["prot_atom"]["res_id"] #starting indices 
         prot_chain_ids = node_data["prot_atom"]["chain_id"] # protein chain ids
         residue_idxs = self.standardize_residue_ids(prot_res_ids, prot_chain_ids)
-``
         # create protein position embeddings
-        protein_position_embeddings = residue_sinusoidal_encoding(residue_idxs, res_id_embed_dim)
-        '''
+        protein_position_encodings = residue_sinusoidal_encoding(residue_idxs, self.res_id_embed_dim)
+        
+        # Add the position embeddings to the graph's protein atom nodes
+        g.nodes["prot_atom"].data["pos_enc"] = protein_position_encodings
+
         # get prior functions
         prior_fns = get_prior(task_class, self.prior_config, training=True)
 
@@ -1095,7 +1097,7 @@ class PlinderDataset(ZarrDataset):
             int(system_info["lig_atom_end"]),
         )
         return lig_atom_start, lig_atom_end
-    '''
+    
     def standardize_residue_ids(self, res_ids: torch.Tensor, chain_ids: torch.Tensor):
         """
         Standardize residue IDs to start at 0 within each chain, 
@@ -1104,14 +1106,21 @@ class PlinderDataset(ZarrDataset):
 
         global_idxs = torch.zeros_like(res_ids)
         unique_chains = torch.unique(chain_ids, sorted=True)
-        current_offset = 0
 
         for chain in unique_chains:
+            chain_mask = chain_ids == chain
+            chain_res_ids = res_ids[chain_mask]
 
+            # Get unique residue IDs in this chain
+            unique_residues = torch.unique(chain_res_ids, sorted=True)
             
-            current_offset += len(unique_residues)
+            # Map to 0-based indices within this chain
+            for local_idx, res_id in enumerate(unique_residues):
+                full_mask = (chain_ids == chain) & (res_ids == res_id)
+                global_idxs[full_mask] = local_idx
+        
         return global_idxs
-    '''
+    
 
 def compute_pskip(
     df: pd.DataFrame,
