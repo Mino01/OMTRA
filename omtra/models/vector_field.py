@@ -469,6 +469,8 @@ class VectorField(nn.Module):
                 task_embedding_batch[node_batch_idx[ntype]]
             )  # expand task embedding for each node in the batch
 
+            
+
             # concatenate all initial node scalar features and pass through the embedding layer
             node_scalar_features[ntype] = torch.cat(
                 node_scalar_features[ntype], dim=-1
