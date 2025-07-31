@@ -17,6 +17,7 @@ from rdkit.Geometry import Point3D
 import numpy as np
 import biotite.structure as struc
 from biotite.interface import rdkit as bt_rdkit
+import os
 from copy import deepcopy
 from omtra.tasks.modalities import name_to_modality
 from collections import defaultdict
@@ -29,7 +30,8 @@ from omtra.data.graph.utils import (
 )
 
 from biotite.structure.io.pdbx import CIFFile
-import biotite.structure as struc
+from biotite.structure.io.pdb import PDBFile
+
 
 
 class SampledSystem:
@@ -462,19 +464,6 @@ class SampledSystem:
             lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
             lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
-
-            # if any('cond_a' in group for group in lig_ndata_feats):
-            #     cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
-
-            #     for cond_a_feat, suffix in cond_a_feats:
-            #         lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
-
-            #         for feat, val in lig_feats_dict.items():
-            #             lig_g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
-                    
-            #         del g.nodes["lig"].data[cond_a_feat]
-
-            #     lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             
         else:
             if g.num_nodes(ntype="npnde") == 0:
@@ -720,7 +709,7 @@ class SampledSystem:
             output_file: str, 
             trajectory: bool = False, 
             endpoint: bool = False,
-            ground_truth: bool = False
+            ground_truth: bool = False,
         ):
         """Write a protein or a protein trajectory to a cif file."""
         output_file = Path(output_file)
@@ -730,7 +719,21 @@ class SampledSystem:
             arrs = self.build_traj(ep_traj=endpoint, prot=True)['prot']
         else:
             arrs = [self.get_protein_array(reference=ground_truth)]
+        
         write_arrays_to_cif(arrs, str(output_file))
+        
+    
+    def write_protein_pdb(self, 
+            output_dir: str,
+            filename: str,
+            ground_truth: bool = False,
+            
+        ):
+        """Write a protein a PDB file."""
+        output_dir = Path(output_dir)
+        arrs = [self.get_protein_array(reference=ground_truth)]
+        write_arrays_to_pdb(arrs, output_dir, filename)
+
 
     def write_pharmacophore(self, 
         output_file, 
@@ -775,6 +778,12 @@ def write_arrays_to_cif(arrays, filename):
     struc.io.pdbx.set_structure(cif_file, arr_stack, include_bonds=True)
     cif_file.write(filename)
 
+def write_arrays_to_pdb(arrays, output_dir, filename):
+    for i, arr in enumerate(arrays):
+        out_path = output_dir / f"{filename}_{i}.pdb"
+        pdb_file = PDBFile()
+        pdb_file.set_structure(arr)
+        pdb_file.write(str(out_path))
 
 def pharm_to_xyz(pos: torch.Tensor, pharm_elements: List[str]):
     out = f'{len(pos)}\n'

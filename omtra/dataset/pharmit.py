@@ -64,6 +64,11 @@ class PharmitDataset(ZarrDataset):
     def __len__(self):
         return self.root['lig/node/graph_lookup'].shape[0]
 
+    @functools.lru_cache()
+    def get_condensed_atom_typer(self):
+        return CondensedAtomTyper(fake_atoms=self.use_fake_atoms)
+
+
     def __getitem__(self, index) -> dgl.DGLHeteroGraph:
         task_name, idx = index
         task_class: Task = task_name_to_class(task_name)
@@ -101,7 +106,7 @@ class PharmitDataset(ZarrDataset):
             extra_feats = self.slice_array(f'lig/node/extra_feats', start_idx, end_idx)
             extra_feats = extra_feats[:, :-1]
             
-            cond_a_typer = CondensedAtomTyper(fake_atoms=self.use_fake_atoms)
+            cond_a_typer = self.get_condensed_atom_typer()
 
             xace_dict['cond_a'] = cond_a_typer.feats_to_cond_a(xace_dict['a'], xace_dict['c'], extra_feats)
             del xace_dict['a']

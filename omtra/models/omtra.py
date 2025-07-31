@@ -85,6 +85,7 @@ class OMTRA(pl.LightningModule):
         self.eval_config = eval_config
         self.og_run_dir = og_run_dir
         self.fake_atom_p = fake_atom_p
+        self.distort_p = distort_p
         self.zero_bo_loss_weight = zero_bo_loss_weight
 
         self.total_loss_weights = total_loss_weights
@@ -351,7 +352,7 @@ class OMTRA(pl.LightningModule):
 
         if self.distort_p > 0.0:
             t_mask = (t > 0.5)[node_batch_idxs["lig"]]
-            distort_mask = torch.rand(g.num_nodes(), 1, device=g.device) < self.distort_p
+            distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
             distort_mask = distort_mask & t_mask.unsqueeze(-1)
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
 

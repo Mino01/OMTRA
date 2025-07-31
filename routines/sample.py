@@ -189,6 +189,7 @@ def write_ground_truth(
         output_dir: Path, 
         sampled_systems,
         g_list,
+        prot_cif: bool = True
     ):
     for cond_idx in range(n_systems):
 
@@ -210,9 +211,12 @@ def write_ground_truth(
 
         # write the ground truth protein if present
         if 'protein_identity' in task.groups_present:
-            gt_prot_file = sys_gt_dir / "protein.cif"
-            sys.write_protein(gt_prot_file, ground_truth=True)
-
+            if prot_cif:
+                gt_prot_file = sys_gt_dir / "protein.cif"
+                sys.write_protein(gt_prot_file, ground_truth=True)
+            else:
+                sys.write_protein_pdb(sys_gt_dir, filename='protein', ground_truth=True)
+            
         # write the ground truth pharmacophore
         if 'pharmacophore' in task.groups_present:
             gt_pharm_file = sys_gt_dir / "pharmacophore.xyz"
