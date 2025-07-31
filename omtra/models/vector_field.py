@@ -72,7 +72,7 @@ class VectorField(nn.Module):
         dst_feat_msg_reduction_factor: float = 4,
         rebuild_edges: bool = False,
         fake_atoms: bool = False,
-        res_id_embedding_dim: int = 64
+        res_id_embed_dim: int = 64
     ):
         super().__init__()
         self.graph_config = graph_config
@@ -194,8 +194,8 @@ class VectorField(nn.Module):
                 ntype
             ]  # number of categorical features for this node type
             input_dim = n_cat_feats * token_dim + self.time_embedding_dim + self.task_embedding_dim
-            if res_id_embedding_dim is not None and ntype == 'prot_atom':
-                input_dim += res_id_embedding_dim
+            if res_id_embed_dim is not None and ntype == 'prot_atom':
+                input_dim += res_id_embed_dim
 
             self.scalar_embedding[ntype] = nn.Sequential(
                 nn.Linear(
