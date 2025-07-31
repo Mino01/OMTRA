@@ -1098,29 +1098,21 @@ class PlinderDataset(ZarrDataset):
         )
         return lig_atom_start, lig_atom_end
     
-    def standardize_residue_ids(self, res_ids: torch.Tensor, chain_ids: torch.Tensor):
+    def standardize_residue_ids(res_ids: torch.Tensor, chain_ids: torch.Tensor):
         """
-        Standardize residue IDs to start at 0 within each chain, 
-        then create global consecutive indices across all chains.
+        Normalize residue IDs within each chain by subtracting the chain-specific minimum residue ID
         """
-
-        global_idxs = torch.zeros_like(res_ids)
+        standardized = torch.zeros_like(res_ids)
         unique_chains = torch.unique(chain_ids, sorted=True)
 
         for chain in unique_chains:
             chain_mask = chain_ids == chain
             chain_res_ids = res_ids[chain_mask]
-
-            # Get unique residue IDs in this chain
-            unique_residues = torch.unique(chain_res_ids, sorted=True)
             
-            # Map to 0-based indices within this chain
-            for local_idx, res_id in enumerate(unique_residues):
-                full_mask = (chain_ids == chain) & (res_ids == res_id)
-                global_idxs[full_mask] = local_idx
-        
-        return global_idxs
-    
+            min_res_id = torch.min(chain_res_ids)
+            standardized[chain_mask] = chain_res_ids - min_res_id
+
+        return standardized
 
 def compute_pskip(
     df: pd.DataFrame,
