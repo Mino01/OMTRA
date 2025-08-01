@@ -1135,7 +1135,7 @@ class PlinderDataset(ZarrDataset):
         )
         return lig_atom_start, lig_atom_end
     
-    def standardize_residue_ids(res_ids: torch.Tensor, chain_ids: torch.Tensor):
+    def standardize_residue_ids(self, res_ids: torch.Tensor, chain_ids: torch.Tensor):
         """
         Normalize residue IDs within each chain by subtracting the chain-specific minimum residue ID
         """
