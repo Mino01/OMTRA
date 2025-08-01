@@ -23,6 +23,7 @@ class SelfConditioningResidualLayer(nn.Module):
         edge_embedding_dim,
         rbf_dim,
         rbf_dmax,
+        res_id_embed_dim,
         n_pharmvec_channels=4,
         fake_atoms: bool = False,
     ):
@@ -57,6 +58,8 @@ class SelfConditioningResidualLayer(nn.Module):
                 self.node_generated_dims[ntype] += rbf_dim
             elif modality.data_key == 'v': # vectors
                 self.node_generated_dims[ntype] += int(self.n_pharmvec_channels**2)
+            elif modality.data_key == 'pos_enc': #position encodings
+                self.node_generated_dims[ntype] += res_id_embed_dim
             else:
                 raise ValueError(f"Unexpected modality: {modality.name}")
             
