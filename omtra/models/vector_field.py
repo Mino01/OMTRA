@@ -424,7 +424,7 @@ class VectorField(nn.Module):
                     )
                 )
             # should be positional encodings
-            elif not modality.is_categorical:
+            elif modality.data_key == "pos_enc":
                 if ntype not in node_scalar_features:
                     node_scalar_features[ntype] = []
                 node_scalar_features[ntype].append(
