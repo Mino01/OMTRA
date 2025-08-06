@@ -388,7 +388,10 @@ class SampledSystem:
             g_dummy = self.g.clone()
         else:
             g_dummy = g.clone()
-        g_dummy = move_feats_to_t1('denovo_ligand', g_dummy, t="1_true")
+        try:
+            g_dummy = move_feats_to_t1('denovo_ligand', g_dummy, t="1_true")
+        except Exception as e:
+            g_dummy = move_feats_to_t1('denovo_ligand_condensed', g_dummy, t="1_true")
         ligdata = self.extract_ligdata_from_graph(g=g_dummy, ctmc_mol=self.ctmc_mol)
         rdkit_mol = self.build_molecule(*ligdata)
         return rdkit_mol
@@ -464,6 +467,20 @@ class SampledSystem:
             lig_g = dgl.node_type_subgraph(g, ntypes=["lig"])
             lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
             lig_edata_feats = list(lig_g.edges["lig_to_lig"].data.keys())
+            
+            if any('cond_a' in group for group in lig_ndata_feats):
+                cond_a_feats = [(feat, suffix) for feat in lig_ndata_feats if "cond_a" in feat for _, suffix in [feat.split("cond_a")]]
+
+                for cond_a_feat, suffix in cond_a_feats:
+                    lig_feats_dict = self.cond_a_typer.cond_a_to_feats(lig_g.nodes["lig"].data[cond_a_feat])
+
+                    for feat, val in lig_feats_dict.items():
+                        lig_g.nodes["lig"].data[f"{feat}{suffix}"] = torch.tensor(val, device=lig_g.device)
+                    
+                    del g.nodes["lig"].data[cond_a_feat]
+
+                lig_ndata_feats = list(lig_g.nodes["lig"].data.keys())
+
             
         else:
             if g.num_nodes(ntype="npnde") == 0:
