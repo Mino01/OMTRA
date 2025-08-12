@@ -119,77 +119,78 @@ def parse_args():
 def pb_valid(
     gen_ligs,
     true_lig,
-    prot,
+    gen_prot_file,
     task: Task,
     pb_workers=0
 ) -> List[bool]:
     
     if 'ligand_identity' in task.groups_generated:
-        config = "dock"
+        config = 'dock'
     else:
         config = 'redock'
     
-    try:
-        Chem.SanitizeMol(prot)
+    # try:
+    #     Chem.SanitizeMol(prot)
 
-        if prot.GetNumAtoms() == 0:
-            print("PoseBusters valid eval: Empty receptor.")
-            return None
-        if true_lig.GetNumAtoms() == 0:
-            print("PoseBusters valid eval: Empty true ligand.")
-            return None
-    except Exception as e:
-        print(f"PoseBusters valid eval: True ligand or protein failed to sanitize: {e}")
-        return None
+    #     if prot.GetNumAtoms() == 0:
+    #         print("PoseBusters valid eval: Empty receptor.")
+    #         return None
+    #     if true_lig.GetNumAtoms() == 0:
+    #         print("PoseBusters valid eval: Empty true ligand.")
+    #         return None
+    # except Exception as e:
+    #     print(f"PoseBusters valid eval: True ligand or protein failed to sanitize: {e}")
+    #     return None
 
     if not gen_ligs:
         return None
 
     buster = pb.PoseBusters(config=config, max_workers=pb_workers)
-    df_pb = buster.bust(gen_ligs, true_lig, prot)
+    df_pb = buster.bust(gen_ligs, true_lig, gen_prot_file)
     df_pb['pb_valid'] = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1)
-
-    # TODO: keep entire table
     
     return df_pb
 
 
-def gnina(protein_file, lig_file, env):
-
-    scores = {'Affinity': [],
-              'CNNscore': [],
-              'CNNaffinity': [],
-              'CNNvariance': [],
-              'Intramolecular energy': [],
-              'vina_min': []}
+def gnina(protein_file, lig_file, output_sdf, env):
+    scores = {'minimizedAffinity': {},
+              'CNNscore': {},
+              'CNNaffinity': {},
+              'CNNaffinity_variance': {}}
 
     vina_cmd = ['./gnina.1.3.2',
                 '-r', protein_file,
                 '-l', lig_file,
                 '--score_only',
+                '-o', output_sdf,
                 '--seed', '42'
                 ]
 
     result = subprocess.run(vina_cmd, capture_output=True, text=True, env=env)
 
     if result.returncode != 0:
-        print("Error running GNINA:")
+        print("Error running GNINA:", flush=True)
         print(result.stderr)
         return None
 
-    for line in result.stdout.splitlines():
-        for name, score in scores.items():
-            if line.strip().startswith(f"{name}: "):
-                try:
-                    score.append(float(line.strip(f"{name}: ").split()[0]))
-                except:
-                    print(f"Failed to extract {name}.")
-                    score.append(None)
-        
+    supplier = Chem.SDMolSupplier(output_sdf, removeHs=False)
+
+    for lig in supplier:
+        if lig is None:
+            continue
+        lig_id = lig.GetProp('_Name')
+
+        for name, vals in scores.items():
+            vals[lig_id] = float(lig.GetProp(name))
+
+    # minimize
+    scores['vina_min'] = {}
+
     vina_min_cmd = [
         './gnina.1.3.2',
         '-r', protein_file,
         '-l', lig_file,
+        '-o', output_sdf,
         '--minimize', 
         '--seed', '42'
         ]
@@ -197,16 +198,22 @@ def gnina(protein_file, lig_file, env):
     result = subprocess.run(vina_min_cmd, capture_output=True, text=True, env=env)
 
     if result.returncode != 0:
-        print("Error running GNINA (minimize):")
+        print("Error running GNINA (minimize):", flush=True)
         print(result.stderr)
         return None
 
-    for line in result.stdout.splitlines():
-        if line.strip().startswith("Affinity:"):
-            try:
-                scores['vina_min'].append(float(line.strip().split()[1]))
-            except:
-                print("GNINA: Failed to extract VINA min score.")
+    supplier = Chem.SDMolSupplier(output_sdf, removeHs=False)
+
+    for lig in supplier:
+        if lig is None:
+            continue
+        lig_id = lig.GetProp('_Name')
+
+        scores['vina_min'][lig_id] = float(lig.GetProp('minimizedAffinity'))
+    
+    # remove temporary file
+    os.remove(output_sdf)
+
     return scores
 
 def posecheck(protein_file, ligs):
@@ -239,65 +246,71 @@ def posecheck(protein_file, ligs):
     return results
 
 def rmsd(gen_lig, true_lig):
-    res = check_rmsd(mol_pred=gen_lig, mol_true=true_lig) # TODO: align firs? Kabsch rmsd
+    res = check_rmsd(mol_pred=gen_lig, mol_true=true_lig)
     res = res.get("results", {})
     rmsd = res.get("rmsd", -1.0)
     return rmsd
 
-def compute_metrics(system_pairs, task, metrics_to_run):
+def compute_metrics(system_pairs, task, metrics_to_run, output_dir):
     env = os.environ.copy()
     env['LD_LIBRARY_PATH'] = "/net/galaxy/home/koes/dkoes/local/miniconda/envs/cuda/lib/"
 
     # dataframe for metrics
     metrics = {'sys_id': [],
                'protein_id': [],
-               'ligand_id': []}
+               'gen_ligand_id': []}
     
     for sys_id, pairs in system_pairs.items():
         for _, data in pairs.items():
             for lig_id in data['gen_ligs_ids']:
                 metrics['sys_id'].append(sys_id)
-                metrics['protein_id'].append(data['protein_id'])
-                metrics['ligand_id'].append(lig_id)
+                metrics['protein_id'].append(data['gen_prot_id'])
+                metrics['gen_ligand_id'].append(lig_id)
     
     metrics = pd.DataFrame(metrics)
     
     for sys_id, pairs in system_pairs.items():
         for pair_id, data in pairs.items():
-            rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['protein_id']) & metrics['ligand_id'].isin(data['gen_ligs_ids'])
+            rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(data['gen_ligs_ids'])
             
             # PoseBusters valid
             if metrics_to_run['pb_valid']:
-                results = pb_valid(data['gen_ligs'], data['true_lig'], data['protein'], task)
+                results = pb_valid(data['gen_ligs'], data['true_lig'], data['gen_prot_file'], task)
                 metrics.loc[rows, results.columns] = results.to_numpy()
             
             # GNINA
             if metrics_to_run['gnina']:
+                output_sdf = f"{output_dir}/gnina_output.sdf" 
+                
                 # generated ligand
-                results = gnina(data['protein_file'], data['gen_ligs_file'], env)
+                results = gnina(data['gen_prot_file'], data['gen_ligs_file'], output_sdf, env)
 
-                for name, val in results.items():
-                    metrics.loc[rows, name] = val
+                if results is not None:
+                    for metric_name, vals in results.items():
+                        for lig_id, score in vals.items():
+                            row = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & (metrics['gen_ligand_id'] == lig_id)
+                            metrics.loc[row, metric_name] = score
 
                 # ground truth ligand
-                results_true = gnina(data['protein_file'], data['true_lig_file'], env)
-
-                for name, val in results_true.items():
-                    metrics.loc[rows, f"{name}_true"] = val*len(data['gen_ligs'])
+                results_true = gnina(data['true_prot_file'], data['true_lig_file'], output_sdf, env)
+                
+                if results_true is not None:
+                    for metric_name, vals in results_true.items():
+                        metrics.loc[rows, f"{metric_name}_true"] = vals['']
 
             # PoseCheck
             if metrics_to_run['posecheck']:
                 # generated ligand
-                results = posecheck(data['protein_file'], data['gen_ligs'])
+                results = posecheck(data['gen_prot_file'], data['gen_ligs'])
                 
                 for name, val in results.items():
                     metrics.loc[rows, name] = val
                 
                 # ground truth ligand
-                results_true = posecheck(data['protein_file'], [data['true_lig']])
+                results_true = posecheck(data['true_prot_file'], [data['true_lig']])
                 
                 for name, val in results_true.items():
-                    metrics.loc[rows, f"{name}_true"] = val*len(data['gen_ligs'])
+                    metrics.loc[rows, f"{name}_true"] = val[0]
             
             # RMSD
             if metrics_to_run['rmsd']:
@@ -351,6 +364,7 @@ def sample_system(ckpt_path: Path,
     # system info
     sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
     sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
+    sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'sys_id']]
 
     # set coms if protein is present
     if 'protein_identity' in task.groups_present and (any(group in task.groups_present for group in ['ligand_identity', 'ligand_identity_condensed'])):
@@ -359,47 +373,23 @@ def sample_system(ckpt_path: Path,
         coms = None
     
     # sample the model in batches
-    reps_per_batch = min(max_batch_size // n_samples, n_replicates)
-    n_full_batches = n_replicates // reps_per_batch
-    last_batch_reps = n_replicates % reps_per_batch
+    # TODO: replace with built-in omtra method
+    sampled_systems = model.sample_in_batches(g_list=g_list,
+                                              n_replicates=n_replicates,
+                                              max_batch_size=max_batch_size,
+                                              task_name=task.name,
+                                              unconditional_n_atoms_dist=dataset,
+                                              device=device,
+                                              n_timesteps=n_timesteps,
+                                              visualize=False,
+                                              coms=coms)
 
-    sampled_systems = []
-    sample_names = []
-
-    for i in range(n_full_batches):
-        sample_names += [f"sys_{sys_idx}_rep_{(i*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(reps_per_batch)]
-
-        sampled_systems += model.sample(g_list=g_list,
-                                    n_replicates=reps_per_batch,
-                                    task_name=task.name,
-                                    unconditional_n_atoms_dist=dataset,
-                                    device=device,
-                                    n_timesteps=n_timesteps,
-                                    visualize=False,
-                                    coms=coms,
-                                    )
-        
-    # last batch
-    if last_batch_reps > 0:
-        sample_names += [f"sys_{sys_idx}_rep_{(n_full_batches*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(last_batch_reps)]
-
-        sampled_systems += model.sample(g_list=g_list,
-                                        n_replicates=last_batch_reps,
-                                        task_name=task.name,
-                                        unconditional_n_atoms_dist=dataset,
-                                        device=device,
-                                        n_timesteps=n_timesteps,
-                                        visualize=False,
-                                        coms=coms,
-                                        )
-     
-    return g_list, sampled_systems, sys_info, sample_names
+    return g_list, sampled_systems, sys_info
 
 
 
 def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
                        sampled_systems: List[SampledSystem],
-                       sample_names: List[str],
                        task: Task,
                        n_replicates: int,
                        output_dir: Path):
@@ -415,6 +405,12 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
         )
     
     system_pairs = {}
+
+    # collect all the ligands for each system
+    sample_names = generate_sample_names(
+        n_systems=len(g_list), 
+        n_replicates=n_replicates
+    )
 
     for sys_id, replicates in enumerate(
         group_samples_by_system(
@@ -433,16 +429,17 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
         gen_ligs = []
 
         # sanitize generated ligands and check that they have atoms
-        for lig in all_gen_ligs:
+        for i, lig in enumerate(all_gen_ligs):
             try:
                 Chem.SanitizeMol(lig)
+                lig.SetProp("_Name", f"gen_ligands_{i}")    # set ligand name
                 
                 if lig.GetNumAtoms() > 0:
                         gen_ligs.append(lig)
                 else:
                     print("Empty generated ligand.")
             except Exception:
-                print("Generated ligand failed to sanitize.")
+                print(f"Generated ligand {i} failed to sanitize.")
         
 
         # sanitize true ligand
@@ -459,24 +456,28 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
             for i, lig in enumerate(gen_ligs):
                 pair = {}
 
-                # generated ligand stuff
-                pair["gen_ligs"] = [lig]
-
+                # generated ligand 
+                pair['gen_ligs'] = [lig]
                 gen_lig_file = sys_gt_dir / f"gen_ligands_{i}.sdf"
                 write_mols_to_sdf([lig], gen_lig_file)
-                pair["gen_ligs_file"] = gen_lig_file
-                pair["gen_ligs_ids"] = [f"gen_ligands_{i}"]
+                pair['gen_ligs_file'] = gen_lig_file
+                pair['gen_ligs_ids'] = [f"gen_ligands_{i}"]
+
+                 # true ligand 
+                pair['true_lig'] = true_lig
+                pair['true_lig_file'] = sys_gt_dir / f"ligand.sdf"
                 
-                # protein stuff
-                pair["protein"] = replicates[i].get_rdkit_protein()
+                # generated protein
+                pair['gen_prot'] = replicates[i].get_rdkit_protein()
+                gen_prot_file = sys_gt_dir / f"gen_prot_{i}.pdb"
+                pair["gen_prot_file"] = gen_prot_file
+                pair["gen_prot_id"] = f"gen_prot_{i}"
 
-                prot_file = sys_gt_dir / f"gen_prot_{i}.pdb"
-                pair["protein_file"] = prot_file
-                pair["protein_id"] = f"gen_prot_{i}"
-
-                # true ligand stuff
-                pair["true_lig"] = true_lig
-                pair["true_lig_file"] = sys_gt_dir / f"ligand.sdf"
+                # true protein
+                pair["true_prot"] = replicates[i].get_rdkit_ref_protein()
+                true_prot_file = sys_gt_dir / "protein_0.pdb"
+                pair["true_prot_file"] = true_prot_file
+                pair["true_prot_id"] = "protein_0"
 
                 sys_pair[f"pair_{i}"] = pair
 
@@ -489,22 +490,25 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
 
             # pair all generated ligands to one reference protein
             pair['gen_ligs'] = gen_ligs
-
             gen_lig_file = sys_gt_dir / f"gen_ligands.sdf"
             write_mols_to_sdf(gen_ligs, gen_lig_file)
             pair['gen_ligs_file'] = gen_lig_file
-
             pair['gen_ligs_ids'] = [f"gen_ligands_{i}" for i in range(len(gen_ligs))]
 
-            # protein stuff
-            pair['protein'] = replicates[0].get_rdkit_protein()
-            pair['protein_file'] = sys_gt_dir / f"protein_0.pdb"
-            pair['protein_id'] = "protein_0"
-            
-            # true ligand stuff
+            # true ligand 
             pair['true_lig'] = true_lig
             pair['true_lig_file'] = sys_gt_dir / f"ligand.sdf"
 
+            # set generated protein to reference protein
+            pair['gen_prot'] = replicates[0].get_rdkit_protein()
+            pair['gen_prot_file'] = sys_gt_dir / f"protein_0.pdb"
+            pair['gen_prot_id'] = "protein_0"
+
+            # true protein
+            pair['true_prot'] = replicates[0].get_rdkit_ref_protein()
+            pair['true_prot_file'] = sys_gt_dir / f"protein_0.pdb"
+            pair['true_prot_id'] = "protein_0"
+            
             sys_pair['pair_0'] = pair
         
         system_pairs[sys_name] = sys_pair
@@ -530,7 +534,7 @@ def main(args):
     samples_dir = output_dir / 'samples' / task_name
 
     # Get samples from checkpoint
-    g_list, sampled_systems, sys_info, sample_names = sample_system(ckpt_path=args.ckpt_path,
+    g_list, sampled_systems, sys_info = sample_system(ckpt_path=args.ckpt_path,
                                                                     task=task,
                                                                     dataset_start_idx=args.dataset_start_idx,
                                                                     n_samples=args.n_samples,
@@ -543,7 +547,6 @@ def main(args):
     # write samples to output files and configure dictionary of system pairs
     system_pairs = write_system_pairs(g_list=g_list,
                                     sampled_systems=sampled_systems,
-                                    sample_names=sample_names,
                                     task=task,
                                     n_replicates=args.n_replicates,
                                     output_dir=samples_dir)
@@ -552,12 +555,15 @@ def main(args):
                       'gnina': args.gnina,
                       'posecheck': args.posecheck,
                       'rmsd': args.rmsd}
+
     
     metrics = compute_metrics(system_pairs=system_pairs,
                               task=task,
-                              metrics_to_run=metrics_to_run)
+                              metrics_to_run=metrics_to_run,
+                              output_dir=samples_dir)
     
-    sys_info.to_csv(f"{output_dir}/{task_name}_sys_info.csv", index=False)
+    metrics = pd.merge(metrics, sys_info, on='sys_id', how='left')
+    
     metrics.to_csv(f"{output_dir}/{task_name}_metrics.csv", index=False)
 
 if __name__ == "__main__":
