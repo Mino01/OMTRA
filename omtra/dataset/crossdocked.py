@@ -16,8 +16,7 @@ from omtra.constants import (
 )
 from omtra.data.graph import build_complex_graph
 from omtra.data.graph import edge_builders, approx_n_edges
-#from omtra.data.xace_ligand import sparse_to_dense, add_k_hop_edges
-from omtra.data.xace_ligand import MolXACE
+from omtra.data.xace_ligand import add_k_hop_edges, MolXACE, add_fake_atoms
 from omtra.tasks.register import task_name_to_class
 from omtra.tasks.tasks import Task
 from omtra.utils.misc import classproperty
@@ -48,28 +47,35 @@ warnings.filterwarnings(
     module="zarr.codecs.vlen_utf8",
 )
 
-
+#ZarrDataset is a base class for datasets stored in zarr format and the parent
+#class of the CrossdockedDataset class
 class CrossdockedDataset(ZarrDataset):
     def __init__(
         self,
-        link_version: str,
-        split: str,
-        processed_data_dir: str,
+        #link_version: str,
+        split: str, # train or test
+        processed_data_dir: str, #base directory where the zarr files live
         graph_config: Optional[DictConfig] = None,
         prior_config: Optional[DictConfig] = None,
+        fake_atom_p: float = 0.0,
     ):
+        #zarr files are read by the init function of the parent class, ZarrDataset
         super().__init__(
-            split,
-            f"{processed_data_dir}/{link_version}"
-            if link_version
-            else f"{processed_data_dir}/no_links",
+            split, processed_data_dir
         )
         self.split = split
-        self.link_version = link_version
+        #self.link_version = link_version
         self.graph_config = graph_config
         self.prior_config = prior_config
+        self.fake_atom_p = fake_atom_p
 
         self.system_lookup = pd.DataFrame(self.root.attrs["system_lookup"])
+        self.npnde_lookup = pd.DataFrame(self.root.attrs["npnde_lookup"])
+
+        # Adding a system index column to the system lookup DataFrame
+        self.system_lookup.reset_index(inplace=True)
+        self.system_lookup.rename(columns={"index": "system_idx"}, inplace=True)
+
 
         self.encode_element = {
             element: i for i, element in enumerate(protein_element_map)
@@ -95,7 +101,54 @@ class CrossdockedDataset(ZarrDataset):
     def __len__(self):
         return self.system_lookup.shape[0]
 
+    
+    def get_npndes(self, npnde_idxs: List[int]) -> Dict[str, LigandData]:
+        npndes = {}
+        for idx in npnde_idxs:
+            npnde_info = self.npnde_lookup[self.npnde_lookup["npnde_idx"] == idx].iloc[
+                0
+            ]
 
+            key = npnde_info["npnde_id"]
+
+            atom_start, atom_end = npnde_info["atom_start"], npnde_info["atom_end"]
+
+            bond_start = (
+                npnde_info["bond_start"]
+                if not pd.isna(npnde_info["bond_start"])
+                else None
+            )
+            bond_end = (
+                npnde_info["bond_end"] if not pd.isna(npnde_info["bond_end"]) else None
+            )
+
+            is_covalent = False
+            if npnde_info["linkages"]:
+                is_covalent = True
+
+            npndes[key] = LigandData(
+                sdf=npnde_info["sdf"],
+                ccd=npnde_info["ccd"],
+                is_covalent=is_covalent,
+                linkages=npnde_info["linkages"],
+                coords=self.slice_array("npnde/coords", atom_start, atom_end),
+                atom_types=self.slice_array("npnde/atom_types", atom_start, atom_end),
+                atom_charges=self.slice_array(
+                    "npnde/atom_charges", atom_start, atom_end
+                ),
+                bond_types=self.slice_array(
+                    "npnde/bond_types", int(bond_start), int(bond_end)
+                )
+                if bond_start is not None and bond_end is not None
+                else np.zeros((0,), dtype=np.int32),
+                bond_indices=self.slice_array(
+                    "npnde/bond_indices", int(bond_start), int(bond_end)
+                )
+                if bond_start is not None and bond_end is not None
+                else np.zeros((0, 2), dtype=np.int32),
+            )
+        return npndes
+    
     def get_system(
         self, index: int, include_pharmacophore: bool, include_protein: bool
     ) -> SystemData:
@@ -127,7 +180,8 @@ class CrossdockedDataset(ZarrDataset):
             int(system_info["pocket_bb_end"]),
         )
 
-        link_type = system_info["link_type"]
+        # link_type = system_info["link_type"]
+        link_type = system_info.get("link_type", None)
         if link_type:
             link_start, link_end = (
                 int(system_info["link_start"]),
@@ -165,7 +219,8 @@ class CrossdockedDataset(ZarrDataset):
                     "receptor/backbone_mask", rec_start, rec_end
                 ),
                 backbone=backbone,
-                cif=system_info["rec_cif"],
+                #cif=system_info["rec_cif"],
+                cif=system_info.get("rec_cif", None)
             )
 
             pocket_backbone = BackboneData(
@@ -201,6 +256,10 @@ class CrossdockedDataset(ZarrDataset):
                 ),
                 backbone=pocket_backbone,
             )
+            npndes = None
+            npnde_idxs = system_info.get("npnde_idxs", None)
+            if npnde_idxs:
+                npndes = self.get_npndes(npnde_idxs)
 
             apo = None
             pred = None
@@ -245,15 +304,19 @@ class CrossdockedDataset(ZarrDataset):
                     backbone=pred_backbone,
                 )
 
-        is_covalent = False
-        if system_info["linkages"]:
-            is_covalent = True
+        # is_covalent = False
+        # if system_info["linkages"]:
+        #     is_covalent = True
+        
+        linkages = system_info.get("linkages", None)
+        ccd = system_info.get("ccd", None)
+        is_covalent = bool(linkages)
 
         ligand = LigandData(
             sdf=system_info["lig_sdf"],
-            ccd=system_info["ccd"],
+            ccd=ccd,
             is_covalent=is_covalent,
-            linkages=system_info["linkages"],
+            linkages=linkages,
             coords=self.slice_array("ligand/coords", lig_atom_start, lig_atom_end),  # x
             atom_types=self.slice_array(
                 "ligand/atom_types", lig_atom_start, lig_atom_end
@@ -286,14 +349,15 @@ class CrossdockedDataset(ZarrDataset):
             )
 
         system = SystemData(
-            system_id=system_info["system_id"],
-            ligand_id=system_info["ligand_id"],
+            system_id=system_info["system_idx"],
+            ligand_id=system_info.get("ligand_id", None),
             receptor=receptor if include_protein else None,
             ligand=ligand,
             pharmacophore=pharmacophore if include_pharmacophore else None,
             pocket=pocket if include_protein else None,
+            npndes=npndes if include_protein else None,
             link_type=link_type,
-            link_id=system_info["link_id"] if link_type else None,
+            link_id=system_info.get("link_id", None) if link_type else None,
             link=apo if apo else pred,
         )
         return system
@@ -304,7 +368,7 @@ class CrossdockedDataset(ZarrDataset):
         elements: np.ndarray,      # (unused here)
         res_names: np.ndarray      # (unused here)
     ) -> np.ndarray:
-        # 1) find all the unique atom_names and the mapping back
+        # _) find all the unique atom_names and the mapping back
         unique_names, inverse = np.unique(atom_names, return_inverse=True)
 
         # 2) do one dict-lookup per unique name
@@ -320,6 +384,7 @@ class CrossdockedDataset(ZarrDataset):
     def encode_elements(self, elements: np.ndarray) -> np.ndarray:
         # Vectorized mapping of element symbols to integer codes
         unique_elems, inverse = np.unique(elements, return_inverse=True)
+
         unique_codes = np.array(
             [self.encode_element[elem] for elem in unique_elems],
             dtype=np.int64
@@ -544,53 +609,37 @@ class CrossdockedDataset(ZarrDataset):
         self,
         ligand: LigandData,
         ligand_id: str,
+        task: Task,
         pocket: Optional[StructureData] = None,
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
         Dict[str, Dict[str, torch.Tensor]],
     ]:
-        coords = torch.from_numpy(ligand.coords).float()
-        atom_types = torch.from_numpy(ligand.atom_types).long()
-        atom_charges = torch.from_numpy(ligand.atom_charges).long()
 
-        if ligand.bond_types is not None and ligand.bond_indices is not None:
-            bond_types = torch.from_numpy(ligand.bond_types).long()
-            bond_indices = torch.from_numpy(ligand.bond_indices).long()
-        else:
-            bond_types = torch.zeros((0,), dtype=torch.long)
-            bond_indices = torch.zeros((2, 0), dtype=torch.long)
-        
-        #create an instance of MolXACE to use function
-        mol_instance = MolXACE(
-            x=coords,           # coordinates
-            a=atom_types,       # atom types  
-            c=atom_charges,     # charges
-            e=bond_types,       # edge/bond types
-            edge_idxs=bond_indices  # edge indices
-        )
-        
-        lig_x, lig_a, lig_c, lig_e, lig_edge_idxs = mol_instance.sparse_to_dense(
-            coords, atom_types, atom_charges, bond_types, bond_indices
-        )
+        lig_xace = ligand.to_xace_mol(dense=True)
 
-        lig_c = self.encode_charges(lig_c)
+        denovo_ligand = 'ligand_identity' in task.groups_generated
+        if self.fake_atom_p > 0 and denovo_ligand:
+            lig_xace = add_fake_atoms(lig_xace, fake_atom_p=self.fake_atom_p)
+
+        lig_c = self.encode_charges(lig_xace.c)
         node_data = {
             "lig": {
-                "x_1_true": lig_x,
-                "a_1_true": lig_a,
+                "x_1_true": lig_xace.x,
+                "a_1_true": lig_xace.a,
                 "c_1_true": lig_c,
             }
         }
 
         edge_data = {
             "lig_to_lig": {
-                "e_1_true": lig_e,
+                "e_1_true": lig_xace.e,
             }
         }
 
         edge_idxs = {
-            "lig_to_lig": lig_edge_idxs,
+            "lig_to_lig": lig_xace.edge_idxs,
         }
         if ligand.is_covalent and ligand.linkages and pocket is not None:
             prot_atom_to_lig_tensor, prot_res_to_lig_tensor = self.infer_covalent_bonds(
@@ -607,7 +656,146 @@ class CrossdockedDataset(ZarrDataset):
                 edge_idxs["lig_covalent_prot_res"] = lig_to_prot_res_tensor
 
         return node_data, edge_idxs, edge_data
+    
+    def convert_npndes(
+        self,
+        npndes: Dict[str, LigandData],
+        pocket: Optional[StructureData] = None,
+    ) -> Tuple[
+        Dict[str, Dict[str, torch.Tensor]],
+        Dict[str, torch.Tensor],
+        Dict[str, Dict[str, torch.Tensor]],
+    ]:
+        node_data, edge_data, edge_idxs = {}, {}, {}
+        node_data["npnde"] = {
+            "x_1_true": torch.empty(0),
+            "a_1_true": torch.empty(0),
+            "c_1_true": torch.empty(0),
+        }
+        edge_data["npnde_to_npnde"] = {"e_1_true": torch.empty(0)}
+        edge_idxs["npnde_to_npnde"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["prot_atom_covalent_npnde"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["npnde_covalent_prot_atom"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["prot_res_covalent_npnde"] = torch.empty((2, 0), dtype=torch.long)
+        edge_idxs["npnde_covalent_prot_res"] = torch.empty((2, 0), dtype=torch.long)
 
+        if not npndes:
+            return node_data, edge_idxs, edge_data
+
+        all_coords = []
+        all_atom_types = []
+        all_atom_charges = []
+        all_bond_types = []
+        all_bond_indices = []
+
+        all_prot_atom_to_npnde_idxs = []
+        all_prot_res_to_npnde_idxs = []
+
+        node_offset = 0
+
+        for npnde_id, ligand_data in npndes.items():
+            coords = torch.from_numpy(ligand_data.coords).float()
+            atom_types = torch.from_numpy(ligand_data.atom_types).long()
+            atom_charges = torch.from_numpy(ligand_data.atom_charges).long()
+
+            all_coords.append(coords)
+            all_atom_types.append(atom_types)
+            all_atom_charges.append(atom_charges)
+
+            # check if the npnde has bonds
+            has_bonds = (
+                ligand_data.bond_types is not None
+                and ligand_data.bond_indices is not None
+            )
+            if has_bonds and ligand_data.bond_types.shape[0] == 0:
+                has_bonds = False
+
+            if has_bonds:
+                bond_types = torch.from_numpy(ligand_data.bond_types).long()
+                bond_indices = torch.from_numpy(ligand_data.bond_indices).long()
+
+                adjusted_indices = bond_indices.clone()
+                adjusted_indices[:, 0] += node_offset
+                adjusted_indices[:, 1] += node_offset
+
+                all_bond_types.append(bond_types)
+                all_bond_indices.append(adjusted_indices)
+
+            if ligand_data.is_covalent and ligand_data.linkages and pocket is not None:
+                prot_atom_to_npnde_tensor, prot_res_to_npnde_tensor = (
+                    self.infer_covalent_bonds(ligand_data, pocket, npnde_atom_type_map)
+                )
+                if prot_atom_to_npnde_tensor.shape[1] > 0:
+                    prot_atom_to_npnde_tensor[1, :] += node_offset
+                    all_prot_atom_to_npnde_idxs.append(prot_atom_to_npnde_tensor)
+                if prot_res_to_npnde_tensor.shape[1] > 0:
+                    prot_res_to_npnde_tensor[1, :] += node_offset
+                    all_prot_res_to_npnde_idxs.append(prot_res_to_npnde_tensor)
+
+            node_offset += coords.shape[0]
+
+        combined_coords = (
+            torch.cat(all_coords, dim=0)
+            if all_coords
+            else torch.zeros((0, 3), dtype=torch.float)
+        )
+        combined_atom_types = (
+            torch.cat(all_atom_types, dim=0)
+            if all_atom_types
+            else torch.zeros((0,), dtype=torch.long)
+        )
+        combined_atom_charges = (
+            torch.cat(all_atom_charges, dim=0)
+            if all_atom_charges
+            else torch.zeros((0,), dtype=torch.long)
+        )
+
+        if all_bond_types and all_bond_indices:
+            combined_bond_types = torch.cat(all_bond_types, dim=0)
+            combined_bond_indices = torch.cat(all_bond_indices, dim=0)
+
+            k = self.graph_config["edges"]["npnde_to_npnde"]["params"]["k"]
+            npnde_x, npnde_a, npnde_c, npnde_e, npnde_edge_idxs = add_k_hop_edges(
+                combined_coords,
+                combined_atom_types,
+                combined_atom_charges,
+                combined_bond_types,
+                combined_bond_indices,
+                k=k,
+            )
+            npnde_c = self.encode_charges(npnde_c)
+
+            node_data["npnde"] = {
+                "x_1_true": npnde_x,
+                "a_1_true": npnde_a,
+                "c_1_true": npnde_c,
+            }
+
+            edge_data["npnde_to_npnde"] = {"e_1_true": npnde_e}
+
+            edge_idxs["npnde_to_npnde"] = npnde_edge_idxs
+        else:
+            combined_atom_charges = self.encode_charges(combined_atom_charges)
+            node_data["npnde"] = {
+                "x_1_true": combined_coords,
+                "a_1_true": combined_atom_types,
+                "c_1_true": combined_atom_charges,
+            }
+
+        if all_prot_atom_to_npnde_idxs:
+            prot_atom_to_npnde_tensor = torch.cat(all_prot_atom_to_npnde_idxs, dim=1)
+            edge_idxs["prot_atom_covalent_npnde"] = prot_atom_to_npnde_tensor
+            npnde_to_prot_atom_tensor = prot_atom_to_npnde_tensor[[1, 0]]
+            edge_idxs["npnde_covalent_prot_atom"] = npnde_to_prot_atom_tensor
+
+        if all_prot_res_to_npnde_idxs:
+            prot_res_to_npnde_tensor = torch.cat(all_prot_res_to_npnde_idxs, dim=1)
+            edge_idxs["prot_res_covalent_npnde"] = prot_res_to_npnde_tensor
+            npnde_to_prot_res_tensor = prot_res_to_npnde_tensor[[1, 0]]
+            edge_idxs["npnde_covalent_prot_res"] = npnde_to_prot_res_tensor
+
+        return node_data, edge_idxs, edge_data
+    
     def convert_pharmacophore(
         self, pharmacophore: PharmacophoreData
     ) -> Tuple[
@@ -634,7 +822,11 @@ class CrossdockedDataset(ZarrDataset):
         return node_data, edge_idxs, edge_data
 
     def convert_system(
-        self, system: SystemData, include_pharmacophore: bool, include_protein: bool
+        self, 
+        system: SystemData,
+        task: Task, 
+        include_pharmacophore: bool, 
+        include_protein: bool
     ) -> Tuple[
         Dict[str, Dict[str, torch.Tensor]],
         Dict[str, torch.Tensor],
@@ -658,10 +850,21 @@ class CrossdockedDataset(ZarrDataset):
             node_data.update(prot_node_data)
             edge_idxs.update(prot_edge_idxs)
             edge_data.update(prot_edge_data)
+            
+            # read npnde data
+            npnde_node_data, npnde_edge_idxs, npnde_edge_data = self.convert_npndes(
+                system.npndes if system.npndes is not None else {}, system.pocket
+            )
+            node_data.update(npnde_node_data)
+            edge_idxs.update(npnde_edge_idxs)
+            edge_data.update(npnde_edge_data)
 
         # read ligand data
         lig_node_data, lig_edge_idxs, lig_edge_data = self.convert_ligand(
-            system.ligand, system.ligand_id, system.pocket
+            system.ligand, 
+            system.ligand_id, 
+            task=task,
+            pocket=system.pocket
         )
         node_data.update(lig_node_data)
         edge_idxs.update(lig_edge_idxs)
@@ -697,6 +900,7 @@ class CrossdockedDataset(ZarrDataset):
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
             self.convert_system(
                 system,
+                task=task_class,
                 include_pharmacophore=include_pharmacophore,
                 include_protein=include_protein,
             )
@@ -758,7 +962,7 @@ class CrossdockedDataset(ZarrDataset):
         # here, unlike in other places, start_idx and end_idx are
         # indexes into the system_lookup array, not a node/edge data array
 
-        node_types = ["lig", "prot_atom", "prot_res"]
+        node_types = ["lig", "prot_atom", "prot_res", "npnde"]
         if "pharmacophore" in task.groups_present:
             node_types.append("pharm")
 
@@ -791,6 +995,21 @@ class CrossdockedDataset(ZarrDataset):
                         )
                     ]
                 )
+            elif ntype == "npnde":
+                counts = []
+                for row in self.system_lookup.iloc[start_idx:end_idx].to_dict(
+                    "records"
+                ):
+                    npnde_count = 0
+                    npnde_idxs = row.get("npnde_idxs", None)
+                    if npnde_idxs:
+                        for npnde_idx in npnde_idxs:
+                            npnde_row = self.npnde_lookup.iloc[npnde_idx]
+                            npnde_count += (
+                                npnde_row["atom_end"] - npnde_row["atom_start"]
+                            )
+                    counts.append(npnde_count)
+                counts = np.array(counts)
             elif ntype == "pharm":
                 counts = np.array(
                     [
