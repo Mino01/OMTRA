@@ -16,10 +16,10 @@ denovo_ligand_condensed = {'lig_x': dict(type='continuous_interpolant'),
 
 denovo_ligand_extra_feats = {
     'lig_x': {
-        'type': 'gaussian',
-        'params': {'ot': True}
+        'type': 'continuous_interpolant',
     }
 }
+
 for modality in ['a', 'c', 'e', 'impl_H', 'aro', 'hyb', 'ring', 'chiral']: 
     denovo_ligand_extra_feats[f'lig_{modality}'] = dict(type='ctmc_mask')
 
