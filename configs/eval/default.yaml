@@ -187,6 +187,33 @@ rigid_docking_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+rigid_docking_extra_feats:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
 flexible_docking:
   - stability:
       train: true
@@ -215,6 +242,33 @@ flexible_docking:
       params:
         clash_cutoff: 0.05
 flexible_docking_condensed:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+flexible_docking_extra_feats:
   - stability:
       train: true
       params: {}
@@ -401,6 +455,32 @@ protein_ligand_denovo_condensed:
       train: true
       params:
         clash_cutoff: 0.05
+protein_ligand_denovo_extra_feats:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
 fixed_protein_ligand_denovo:
   - validity:
       train: true
@@ -428,6 +508,32 @@ fixed_protein_ligand_denovo:
       params:
         clash_cutoff: 0.05
 fixed_protein_ligand_denovo_condensed:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+fixed_protein_ligand_denovo_extra_feats:
   - validity:
       train: true
       params: {}

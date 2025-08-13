@@ -22,7 +22,7 @@ denovo_ligand_extra_feats = {
         'params': {'ot': True}
     }
 }
-for modality in ['a', 'c', 'e', 'impl_H', 'aro', 'hyb', 'ring', 'chiral']:  # TODO: correct?
+for modality in ['a', 'c', 'e', 'impl_H', 'aro', 'hyb', 'ring', 'chiral']:
     denovo_ligand_extra_feats[f'lig_{modality}'] = dict(type='masked')
 
 
