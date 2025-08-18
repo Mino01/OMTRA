@@ -76,6 +76,10 @@ class CrossdockedDataset(ZarrDataset):
         self.system_lookup.reset_index(inplace=True)
         self.system_lookup.rename(columns={"index": "system_idx"}, inplace=True)
 
+        #Filtering out systems with ligands composed of less than 6 atoms
+        atom_counts = (self.system_lookup['lig_atom_end'] - self.system_lookup['lig_atom_start'])
+        valid_systems = atom_counts >= 6
+        self.system_lookup = self.system_lookup[valid_systems].reset_index(drop=True)
 
         self.encode_element = {
             element: i for i, element in enumerate(protein_element_map)
