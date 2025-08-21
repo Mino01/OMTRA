@@ -91,7 +91,7 @@ if __name__ == "__main__":
     # Each folder contains train.zarr and val.zarr
 
     #Types_file pairs is a list of lists, where each inner list contains pairs of train and test types files represented as tuples (train, test)
-    output_dir = Path(args.zarr_output_dir)  # Either data/crossdocked or omtra_pipelines/crossdocked_dataset
+    output_dir = Path(args.zarr_output_dir)  # Either data/crossdocked or omtra_pipelines/crossdocked_dataset/zarr_storage_test
     i = 0
     for train_file, test_file in types_files_pairs:
         current_folder = f"internal_split{i}"
@@ -115,7 +115,7 @@ if __name__ == "__main__":
         #     pocket_cutoff=args.pocket_cutoff,
         #     n_cpus=1     
         # )
-        ##### Process in parallel ####
+        #### Process in parallel ####
         converter_train.process_dataset_parallel(
         batches=batches_train,
         pocket_cutoff=args.pocket_cutoff,
