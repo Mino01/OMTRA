@@ -235,11 +235,9 @@ class OMTRA(pl.LightningModule):
 
         # create auxiliary loss functions
         self.aux_loss_fn_dict = nn.ModuleDict()
-        self.aux_loss_weights = {}
         for aux_loss_name, aux_loss_cfg in self.aux_loss_cfg.items():
             aux_loss_class = aux_loss_name_to_class(aux_loss_name)
             self.aux_loss_fn_dict[aux_loss_name] = aux_loss_class(**aux_loss_cfg.get('params', {}))
-            self.aux_loss_weights[aux_loss_name] = aux_loss_cfg.get("weight", 1.0)
 
     # @profile
     def training_step(self, batch_data, batch_idx):
@@ -437,10 +435,15 @@ class OMTRA(pl.LightningModule):
         for aux_loss_name, aux_loss_fn in self.aux_loss_fn_dict.items():
             if not aux_loss_fn.supports_task(task_class):
                 continue
-            aux_loss = aux_loss_fn(g, vf_output, task_class, lig_ue_mask)
+            aux_loss = aux_loss_fn(
+                g, 
+                vf_output, 
+                task_class, 
+                node_batch_idxs,
+                lig_ue_mask)
             if self.time_scaled_loss:
                 aux_loss = aux_loss.mean()
-            losses[aux_loss_name] = aux_loss * self.aux_loss_weights[aux_loss_name]
+            losses[aux_loss_name] = aux_loss
 
         return losses
 

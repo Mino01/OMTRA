@@ -4,10 +4,12 @@ import torch
 import torch.nn as nn
 import dgl
 import dgl.function as fn
+import torch_cluster as tc
 
 from typing import Dict
 from omtra.utils.graph import g_local_scope
 from omtra.tasks.tasks import Task
+from omtra.tasks.modalities import name_to_modality
 from omtra.models.gvp import _norm_no_nan
 
 @register_aux_loss(name='prot_lig_pairdist')
@@ -16,14 +18,17 @@ class ProtLigDist(nn.Module):
     # TODO: a better engineer would define a general pairwise distance class that operated across any arbitrary edge type
     # and then perhaps define separate pair distance classes as child class of this general one
 
-    def __init__(self):
+    def __init__(self, weight=1.0, d_max=4.5):
         super().__init__()
+        self.weight = weight
+        self.d_max = d_max
 
     @g_local_scope
     def forward(self, 
                 g: dgl.DGLHeteroGraph, 
                 dst_dict: Dict[str, torch.Tensor], 
                 task: Task, 
+                node_batch_idxs: Dict[str, torch.Tensor],
                 lig_ue_mask: torch.Tensor):
         # Compute the pairwise distance loss
         
@@ -34,29 +39,43 @@ class ProtLigDist(nn.Module):
 
         # determine the features to use to compute the pairwise distances in the generated structure,
         # set these features as x_d on the relevant node types
-        if 'lig_x' in modalities_generated:
+        if name_to_modality('lig_x') in modalities_generated:
             g.nodes['lig'].data['x_d'] = dst_dict['lig_x']
         else:
             g.nodes['lig'].data['x_d'] = g.nodes['lig'].data['x_1_true']
 
-        if 'prot_atom_x' in modalities_generated:
+        if name_to_modality('prot_atom_x') in modalities_generated:
             g.nodes['prot_atom'].data['x_d'] = dst_dict['prot_atom_x']
         else:
             g.nodes['prot_atom'].data['x_d'] = g.nodes['prot_atom'].data['x_1_true']
 
+
+        # get edges for pairwise distance. 
+        # this requires a 4.5 angstrom radius graph on the ground-truth structure
+        edge_idxs = tc.radius(
+            x=g.nodes['prot_atom'].data['x_1_true'], 
+            y=g.nodes['lig'].data['x_1_true'], 
+            batch_x=node_batch_idxs['prot_atom'], 
+            batch_y=node_batch_idxs['lig'], 
+            r=self.d_max, 
+            max_num_neighbors=15)
+        src_idxs = edge_idxs[0] # lig atom indicies
+        dst_idxs = edge_idxs[1]  # prot atom indicies
+
+
         # compute dij for generated structure
-        g.apply_edges(fn.u_sub_v("x_d", "x_d", "x_diff_gen"), etype=etype)
-        dij_gen = _norm_no_nan(g.edges[etype].data['x_diff_gen'])
+        x_diff_gen = g.nodes['lig'].data['x_d'][src_idxs] - g.nodes['prot_atom'].data['x_d'][dst_idxs]
+        dij_gen = _norm_no_nan(x_diff_gen)
 
         # compute dij for ground-truth structure
-        g.apply_edges(fn.u_sub_v("x_1_true", "x_1_true", "x_diff"), etype=etype)
-        dij = _norm_no_nan(g.edges[etype].data['x_diff'])
+        x_diff_true = g.nodes['lig'].data['x_1_true'][src_idxs] - g.nodes['prot_atom'].data['x_1_true'][dst_idxs]
+        dij_true = _norm_no_nan(x_diff_true)
 
         # TODO: what about time-dependent weighting? 
 
-        loss = nn.MSELoss()(dij_gen, dij)
-        return loss
-    
+        loss = nn.MSELoss()(dij_gen, dij_true)
+        return loss * self.weight
+
     def supports_task(self, task: Task) -> bool:
         """
         Check if this auxiliary loss supports the given task.
@@ -71,15 +90,17 @@ class LigPairLoss(nn.Module):
     This loss computes the MSE between the pairwise distances of the generated ligand structure
     and the ground-truth ligand structure.
     """
-    
-    def __init__(self, d_max: float = 4.0):
+
+    def __init__(self, d_max: float = 4.0, weight: float = 1.0):
         super().__init__()
         self.d_max = d_max
+        self.weight = weight
 
     def forward(self, 
                 g: dgl.DGLHeteroGraph, 
                 dst_dict: Dict[str, torch.Tensor], 
                 task: Task, 
+                node_batch_idxs: Dict[str, torch.Tensor],
                 lig_ue_mask: torch.Tensor):
         
         # TODO: use task to determine if we need this loss at all
@@ -107,11 +128,10 @@ class LigPairLoss(nn.Module):
         d_mask = dij_true < self.d_max
 
         loss = nn.MSELoss()(dij_pred[d_mask], dij_true[d_mask])
-        return loss
-    
+        return loss * self.weight
+
     def supports_task(self, task: Task) -> bool:
         """
         Check if this auxiliary loss supports the given task.
-        This loss is only applicable to tasks that involve protein-ligand interactions.
         """
         return 'ligand_identity' in task.groups_present
