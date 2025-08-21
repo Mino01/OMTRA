@@ -70,6 +70,10 @@ class OMTRA(pl.LightningModule):
         distort_p: float = 0.0,
         eval_config: Optional[DictConfig] = None,
         zero_bo_loss_weight: float = 1.0,
+        train_t_dist: str = 'uniform',
+        t_alpha: float = 1.8,
+        cat_loss_weight: float = 1.0,
+        time_scaled_loss: bool = False,
     ):
         super().__init__()
 
@@ -87,6 +91,7 @@ class OMTRA(pl.LightningModule):
         self.fake_atom_p = fake_atom_p
         self.distort_p = distort_p
         self.zero_bo_loss_weight = zero_bo_loss_weight
+        self.cat_loss_weight = cat_loss_weight
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -130,7 +135,7 @@ class OMTRA(pl.LightningModule):
             "lig_e_condensed": 4,
             "pharm_a": len(ph_idx_to_type),
         }
-        self.time_scaled_loss = False
+        self.time_scaled_loss = time_scaled_loss
         self.interpolant_scheduler = InterpolantScheduler(schedule_type="linear")
         self.vector_field = hydra.utils.instantiate(
             vector_field,
@@ -155,6 +160,16 @@ class OMTRA(pl.LightningModule):
         self.save_hyperparameters(ignore=["ligand_encoder_checkpoint"])
 
         self.cond_a_typer = CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
+
+        # configure train t distribution 
+        if train_t_dist == 'uniform':
+            self.train_t_sampler = lambda batch_size, device: torch.rand(batch_size, device=device).float()
+        elif train_t_dist == 'beta':
+            self.train_t_sampler = lambda batch_size, device: torch.distributions.Beta(t_alpha, 1).sample((batch_size,)).to(device).float()
+        else:
+            raise ValueError(
+                f"Unsupported t distribution: Only uniform or beta time distributions are supported, but specified {train_t_dist}."
+            )
 
     # some code for debugging parameter consistency issues across multiple GPUs
     # def setup(self, stage=None):
@@ -336,7 +351,7 @@ class OMTRA(pl.LightningModule):
     def forward(self, g: dgl.DGLHeteroGraph, task_name: str):
         # sample time
         # TODO: what are time sampling methods used in other papers?
-        t = torch.rand(g.batch_size, device=g.device).float()
+        t = self.train_t_sampler(batch_size=g.batch_size, device=g.device)
 
         # maybe not necessary right now, perhaps after we add edges appropriately
         node_batch_idxs, edge_batch_idxs = get_batch_idxs(g)
@@ -386,17 +401,23 @@ class OMTRA(pl.LightningModule):
             targets[modality.name] = target
 
         if self.time_scaled_loss:
+            weights = 1.0 / ((1.0 - t).clamp(min=1e-6)) ** 2    # clamp to avoid division by 0 error
+            weights = torch.clamp(weights, max=100.0)
+
             time_weights = {}
             for modality in task_class.modalities_generated:
-                time_weights[modality.name] = torch.ones_like(t)
-                time_weights[modality.name] = (
-                    time_weights[modality.name] / time_weights[modality.name].sum()
-                )  # TODO: actually implement this
-
+                time_weights[modality.name] = weights
+               
         losses = {}
         for modality in task_class.modalities_generated:
+            is_categorical = modality.n_categories and modality.n_categories > 0
+
             if self.time_scaled_loss:
                 weight = time_weights[modality.name]
+
+                if is_categorical:
+                    weight = weight * self.cat_loss_weight
+
                 if modality.graph_entity == "edge":
                     weight = weight[edge_batch_idxs[modality.entity_name]][
                         upper_edge_mask[modality.entity_name]
@@ -404,8 +425,12 @@ class OMTRA(pl.LightningModule):
                 else:
                     weight = weight[node_batch_idxs[modality.entity_name]]
                 weight = weight.unsqueeze(-1)
+
+            elif is_categorical:
+                weight = self.cat_loss_weight
             else:
                 weight = 1.0
+
             target = targets[modality.name]
             if modality.is_node and g.num_nodes(modality.entity_name) == 0:
                 losses[modality.name] = torch.tensor(0.0, device=g.device)
