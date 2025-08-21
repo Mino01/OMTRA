@@ -252,7 +252,10 @@ class OMTRA(pl.LightningModule):
         self.aux_loss_fn_dict = nn.ModuleDict()
         for aux_loss_name, aux_loss_cfg in self.aux_loss_cfg.items():
             aux_loss_class = aux_loss_name_to_class(aux_loss_name)
-            self.aux_loss_fn_dict[aux_loss_name] = aux_loss_class(**aux_loss_cfg.get('params', {}))
+            self.aux_loss_fn_dict[aux_loss_name] = aux_loss_class(
+                time_scaled_loss=self.time_scaled_loss,
+                **aux_loss_cfg.get('params', {})
+            )
 
     # @profile
     def training_step(self, batch_data, batch_idx):
@@ -369,6 +372,8 @@ class OMTRA(pl.LightningModule):
         upper_edge_mask["lig_to_lig"] = lig_ue_mask
 
         # sample conditional path
+        # TODO: ctmc conditional path sampling manually sets things to mask token rather 
+        # than setting to prior value (which is usually mask token)
         task_class: Task = task_name_to_class(task_name)
         g = self.sample_conditional_path(
             g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
@@ -417,15 +422,11 @@ class OMTRA(pl.LightningModule):
 
             time_weights = {}
             for modality in task_class.modalities_generated:
-                time_weights[modality.name] = torch.ones_like(t)
-                time_weights[modality.name] = (
-                    time_weights[modality.name] / time_weights[modality.name].sum()
-                )  # TODO: actually implement this
-
+                time_weights[modality.name] = weights
+        else:
+            weights = None
 
         # compute all flow matching losses
-                time_weights[modality.name] = weights
-               
         losses = {}
         for modality in task_class.modalities_generated:
             is_categorical = modality.is_categorical
@@ -469,7 +470,9 @@ class OMTRA(pl.LightningModule):
                 vf_output, 
                 task_class, 
                 node_batch_idxs,
-                lig_ue_mask)
+                lig_ue_mask,
+                time_weights=weights
+                )
             if self.time_scaled_loss:
                 aux_loss = aux_loss.mean()
             losses[aux_loss_name] = aux_loss
