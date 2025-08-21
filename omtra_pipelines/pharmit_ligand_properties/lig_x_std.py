@@ -67,7 +67,7 @@ if __name__ == '__main__':
     result = rand_lig_x_summary(atom_x, graph_lookup, args.n_seeds, args.batch_size)
     end_time = time.time()
 
-    with open(args.output_dir / f'{args.split}_x_mean_std.pkl', 'wb') as f:
+    with open(args.output_dir / f'{args.split}_x_std.pkl', 'wb') as f:
         pickle.dump(result, f)
 
     print(f"––––––––––––––––––––––––––––––––––")
