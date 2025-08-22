@@ -137,6 +137,8 @@ def pb_valid(
     if ('ligand_identity' in task.groups_generated) or ('ligand_identity_condensed' in task.groups_generated):
         config = 'dock'
         true_lig = None
+    elif true_lig is None:  # ground truth ligand case
+        config = 'dock'
     else:
         config = 'redock'
 
@@ -145,8 +147,8 @@ def pb_valid(
 
     buster = pb.PoseBusters(config=config, max_workers=pb_workers)
     df_pb = buster.bust(gen_ligs, true_lig, prot_file)
-    df_pb['pb_valid'] = df_pb[df_pb['sanitization'] == True].values.astype(bool).all(axis=1)
     df_pb.columns = [f"pb_{col}" for col in df_pb.columns]
+    df_pb['pb_valid'] = df_pb[df_pb['pb_sanitization'] == True].values.astype(bool).all(axis=1)
     
     return df_pb
 
@@ -219,9 +221,10 @@ def gnina(prot_file, lig_file, output_sdf, env):
 
     return scores
 
+
 def posecheck(prot_file, ligs):
     
-    # Initialize the PoseCheck object
+    # initialize the PoseCheck object
     pc = PoseCheck()
     
     interaction_types = ['HBAcceptor', 'HBDonor', 'Hydrophobic']
@@ -247,6 +250,7 @@ def posecheck(prot_file, ligs):
         results[i_type] = [n_interactions / n_atoms for (n_interactions, n_atoms) in zip(i_sum, n_lig_atoms)]  # number of interactions normalized by the number of ligand atoms
 
     return results
+
 
 def rmsd(gen_lig, true_lig):
     res = check_rmsd(mol_pred=gen_lig, mol_true=true_lig)
@@ -322,12 +326,24 @@ def compute_metrics(system_pairs,
                                            task=task)
 
                 if results is not None:
-                    # prevent accidental float dtype
-                    for col in results.columns:
-                        if col not in metrics:
-                            metrics[col] = pd.Series(dtype=bool)
+                    # # prevent accidental float dtype
+                    # for col in results.columns:
+                    #     if col not in metrics:
+                    #         metrics[col] = pd.Series(dtype=bool)
 
-                    metrics.loc[rows, results.columns] = results.to_numpy()
+                    metrics.loc[rows, results.columns] = results.to_numpy(dtype=bool)
+                
+
+                true_results = run_with_timeout(pb_valid,
+                                           timeout=timeout,
+                                           gen_ligs=data['true_lig'], 
+                                           true_lig=None, 
+                                           prot_file=data['gen_prot_file'], 
+                                           task=task)
+
+                if true_results is not None:
+                    cols = [f"{c}_true" for c in true_results.columns]
+                    metrics.loc[rows, cols] = true_results.to_numpy(dtype=bool)
             
             # GNINA
             if metrics_to_run['gnina']:
