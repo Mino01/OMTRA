@@ -147,7 +147,7 @@ class VectorField(nn.Module):
                 continue
             # if the modality is being generated, there is an extra mask token
             is_generated = m.name in modality_generated_space
-            has_fake_atoms = (m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
+            has_fake_atoms = (m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms 
             self.token_embeddings[m.name] = nn.Embedding(
                 m.n_categories + int(is_generated) + int(has_fake_atoms), token_dim
             )

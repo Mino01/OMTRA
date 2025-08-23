@@ -92,6 +92,7 @@ class OMTRA(pl.LightningModule):
         self.eval_config = eval_config
         self.og_run_dir = og_run_dir
         self.fake_atom_p = fake_atom_p
+        self.use_fake_atoms = self.fake_atom_p > 0
         self.distort_p = distort_p
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
@@ -523,13 +524,6 @@ class OMTRA(pl.LightningModule):
             if modality.graph_entity == "edge":
                 conditional_path_fn = partial(conditional_path_fn, ue_mask=lig_ue_mask)
 
-            if modality.is_categorical:
-                fake_atoms = (self.fake_atom_p > 0.0) and ((modality.data_key == 'a') or ((modality.data_key == 'cond_a')))
-                n_categories = modality.n_categories + int(fake_atoms)  # correction for fake atoms
-                conditional_path_fn = partial(
-                    conditional_path_fn, n_categories=n_categories
-                )
-
             # expand alpha_t and beta_t for the nodes/edges
             if modality.graph_entity == "node":
                 batch_idxs = node_batch_idxs[modality.entity_name]
@@ -731,7 +725,14 @@ class OMTRA(pl.LightningModule):
 
         # sample prior distributions for each modality
         prior_fns = get_prior(task, self.prior_config, training=False)
-        g = sample_priors(g, task, prior_fns, training=False, com=com_batch)
+        g = sample_priors(
+            g, 
+            task, 
+            prior_fns, 
+            training=False, 
+            com=com_batch,
+            fake_atoms=self.use_fake_atoms
+            )
 
         # TODO: need to solidify creatioin of upper edge mask (where to do this (not just in sample), etc)
         upper_edge_mask = {}
@@ -799,7 +800,7 @@ class OMTRA(pl.LightningModule):
             sampled_system = SampledSystem(
                 g=g_i,
                 task=task,
-                fake_atoms=self.fake_atom_p>0.0,
+                fake_atoms=self.use_fake_atoms,
                 cond_a_typer=self.cond_a_typer,
                 **ss_kwargs,
             )
