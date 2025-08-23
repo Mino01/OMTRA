@@ -227,7 +227,7 @@ def posecheck(prot_file, ligs):
     # initialize the PoseCheck object
     pc = PoseCheck()
     
-    interaction_types = ['HBAcceptor', 'HBDonor', 'Hydrophobic']
+    interaction_types = ['HBAcceptor', 'HBDonor', 'Hydrophobic', 'PiStacking']
 
     results = {}
 
