@@ -1,5 +1,6 @@
 import numpy as np
 import pickle
+import torch
 
 from omtra.utils import omtra_root
 from omtra.constants import lig_atom_type_map, charge_map, extra_feats_map
@@ -23,12 +24,39 @@ class CondensedAtomTyper():
         with open(plinder_cond_a_path, 'rb') as f:
             plinder_cond_a_counts = pickle.load(f)    
 
-        # update tuple list with Plinder data
-        for _, plinder_version_cond_a in plinder_cond_a_counts.items():
-            new_cond_a = [tuple for tuple in plinder_version_cond_a if tuple not in cond_a_list]
-            cond_a_list = cond_a_list + new_cond_a
+
+        cond_to_uncond = np.array(cond_a_list, dtype=np.int64)  # array of shape (n_types, n_feats)
+
+        plinder_uncond_tuples = []
+        for plinder_version_cond_a in plinder_cond_a_counts.values():
+            plinder_uncond_tuples.append(np.array(list(plinder_version_cond_a.keys()), dtype=np.int64))
+
+        # Concatenate arrays and find unique rows
+        all_tuples = np.vstack([cond_to_uncond] + plinder_uncond_tuples)
+        cond_to_uncond = np.unique(all_tuples, axis=0)
+        self.cond_to_uncond = cond_to_uncond
+
+        self.uncond_tuple_to_cond_idx = {
+            tuple(cond_to_uncond[i].tolist()): i
+            for i in range(cond_to_uncond.shape[0])
+        }
+
+        ############### begin refactor
+
+        # # update tuple list with Plinder data
+        # for _, plinder_version_cond_a in plinder_cond_a_counts.items():
+        #     new_cond_a = [tuple for tuple in plinder_version_cond_a if tuple not in cond_a_list]
+        #     cond_a_list = cond_a_list + new_cond_a
         
-        self.cond_a_list = cond_a_list
+        # self.cond_a_list = cond_a_list
+
+
+        # this was from checking that atom typing order is preserved after refactor
+        # order_preserved = True
+        # for i in range(cond_to_uncond.shape[0]):
+        #     same_types = cond_a_list[0] == tuple(cond_to_uncond[0].tolist())
+        #     if not same_types:
+        #         order_preserved = False
     
         self.fake_atoms = fake_atoms
         self.lig_feats = ['a', 'c'] + list(extra_feats_map.keys())
@@ -36,37 +64,59 @@ class CondensedAtomTyper():
         if self.fake_atoms:
             self.fake_atom_tuple = (len(lig_atom_type_map),) + (0,) * (len(self.lig_feats)- 1)
             self.masked_atom_tuple = (len(lig_atom_type_map)+1, len(charge_map), ) + tuple(extra_feats_map.values())
+            self.fake_atom_idx = self.cond_to_uncond.shape[0]
+            self.masked_atom_idx = self.cond_to_uncond.shape[0] + 1
         else:
             self.fake_atom_tuple = None
             self.masked_atom_tuple = (len(lig_atom_type_map), len(charge_map), ) + tuple(extra_feats_map.values())
+            self.fake_atom_idx = None
+            self.masked_atom_idx = self.cond_to_uncond.shape[0]
 
-        
     def feats_to_cond_a(self,
                           a: np.array,
                           c: np.array,
                           extra_feats: np.array
                           ):
-        # Convert from atom features to condensed atom type index
+        input_uncond_feats = np.concatenate([a[:, None], c[:, None], extra_feats], axis=1)
 
-        lig_feat_tuples =  [(atom_type, atom_charge, *ef) for atom_type, atom_charge, ef in zip(a.tolist(), c.tolist(), extra_feats.tolist())]
+        unique_uncond_feats, inverse = np.unique(input_uncond_feats, axis=0, return_inverse=True)
 
-        cond_a = []
+        unique_cond_feats = []
+        for uf in unique_uncond_feats:
+            uf = tuple(uf)
+            if uf in self.uncond_tuple_to_cond_idx:
+                unique_cond_feats.append(self.uncond_tuple_to_cond_idx[uf])
+            elif self.fake_atoms and (uf == self.fake_atom_tuple):
+                unique_cond_feats.append(self.fake_atom_idx)
+            elif uf == self.masked_atom_tuple:
+                unique_cond_feats.append(self.masked_atom_idx)
+            else:
+                raise ValueError(f"Encountered invalid atom feature tuple: {uf}")
 
-        for lig_feat_tuple in lig_feat_tuples:
-            try:
-                if (self.fake_atom_tuple is not None) and (lig_feat_tuple == self.fake_atom_tuple):  # fake atom type
-                    cond_a.append(len(self.cond_a_list))
+        cond_feats = np.array(unique_cond_feats)[inverse]
+        return cond_feats
 
-                elif lig_feat_tuple == self.masked_atom_tuple:  # masked atom type
-                    cond_a.append(len(self.cond_a_list)+1)
+        # # Convert from atom features to condensed atom type index
+
+        # lig_feat_tuples =  [(atom_type, atom_charge, *ef) for atom_type, atom_charge, ef in zip(a.tolist(), c.tolist(), extra_feats.tolist())]
+
+        # cond_a = []
+
+        # for lig_feat_tuple in lig_feat_tuples:
+        #     try:
+        #         if (self.fake_atom_tuple is not None) and (lig_feat_tuple == self.fake_atom_tuple):  # fake atom type
+        #             cond_a.append(len(self.cond_a_list))
+
+        #         elif lig_feat_tuple == self.masked_atom_tuple:  # masked atom type
+        #             cond_a.append(len(self.cond_a_list)+1)
                 
-                else:
-                    cond_a.append(self.cond_a_list.index(lig_feat_tuple))
+        #         else:
+        #             cond_a.append(self.cond_a_list.index(lig_feat_tuple))
 
-            except Exception as e:
-                print(f"Encountered invalid atom feature tuple: {lig_feat_tuple}", flush=True)
+        #     except Exception as e:
+        #         print(f"Encountered invalid atom feature tuple: {lig_feat_tuple}", flush=True)
 
-        cond_a = np.array(cond_a)
+        # cond_a = np.array(cond_a)
         
         return cond_a
     
