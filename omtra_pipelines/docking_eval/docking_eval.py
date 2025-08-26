@@ -346,6 +346,7 @@ def compute_metrics(system_pairs,
 
                 if results is not None:
                     metrics.loc[valid_lig_rows, results.columns] = results.to_numpy(dtype=bool)
+                    metrics.loc[~valid_lig_rows, results.columns] = False
                 
                 true_results = run_with_timeout(pb_valid,
                                                 timeout=timeout,
