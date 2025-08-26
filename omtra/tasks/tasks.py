@@ -473,6 +473,24 @@ class ProteinLigandPharmacophoreDeNovoCondensed(Task):
 
     conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.denovo_pharmacophore, **cpc.protein)
 
+# TODO: fixed protein ligand pharmacophore denovo condensed
+
+# TODO: fix this
+@register_task("protein_ligand_pharmacophore_denovo_condensed")
+class ProteinLigandPharmacophoreDeNovoCondensed(Task):
+    groups_fixed = ['protein_identity', 'pharmacophore']
+    groups_generated = ['protein_structure', 'ligand_identity_condensed', 'ligand_structure']
+
+    priors = dict(**pc.denovo_ligand_condensed, **pc.denovo_pharmacophore)
+    priors['prot_atom_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+    priors['npnde_x'] = {
+        'type': 'target_dependent_gaussian',
+    }
+
+    conditional_paths = dict(**cpc.denovo_ligand_condensed, **cpc.denovo_pharmacophore, **cpc.protein)
+
 
 # TODO: there could be more protein+ligand+pharmacophore tasks but that is a future decision
 

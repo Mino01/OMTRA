@@ -10,10 +10,14 @@ defaults:
 task_phases:
   - duration_batches: null
     tasks:
-      - name: protein_ligand_pharmacophore_denovo_condensed
-        probability: 1.0
+      - name: fixed_protein_ligand_pharmacophore_denovo_condensed
+        probability: 0.5
+      - name: rigid_docking_pharmacophore_condensed
+        probability: 0.5
 
 # define p(dataset|task) coupling (assume static for simplicity)
 dataset_task_coupling:
-  protein_ligand_pharmacophore_denovo_condensed:
+  fixed_protein_ligand_pharmacophore_denovo_condensed:
+    - [plinder, 1.0]
+  rigid_docking_pharmacophore_condensed:
     - [plinder, 1.0]
