@@ -265,3 +265,10 @@ def pb_valid_pocket(
         metrics['pb_valid_pocket'] = n_pb_valid / len(sampled_systems) 
     
     return metrics
+
+
+@register_eval("reos_and_rings")
+def check_reos_and_rings(
+    sampled_systems: List[SampledSystem], params: Dict[str, Any]
+) -> Dict[str, Any]:
+    return reos_and_rings(sampled_systems)

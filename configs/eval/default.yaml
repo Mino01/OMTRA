@@ -64,6 +64,28 @@ denovo_ligand_condensed:
       train: true
       params:
         max_workers: 0
+denovo_ligand_from_pharmacophore_condensed:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - pb_valid_unconditional:
+      train: true
+      params:
+        max_workers: 0
 ligand_conformer:
   - stability:
       train: true
@@ -133,6 +155,28 @@ ligand_conformer_condensed:
       train: true
       params:
         max_workers: 0
+ligand_conformer_from_pharmacophore_condensed:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - pb_valid_unconditional:
+      train: true
+      params:
 rigid_docking:
   - stability:
       train: true
@@ -638,6 +682,60 @@ pred_apo_conditioned_denovo_ligand:
       params:
         clash_cutoff: 0.05
 pred_apo_conditioned_denovo_ligand_condensed:
+  - validity:
+      train: true
+      params: {}
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+rigid_docking_pharmacophore_condensed:
+  - stability:
+      train: true
+      params: {}
+  - reos_and_rings:
+      train: true
+      params: {}
+  - geometry:
+      train: true
+      params:
+        ignore_hydrogens: true
+  - flatness:
+      train: true
+      params:
+        threshold_flatness: 0.1
+  - intermolecular_distance:
+      train: true
+      params:
+        clash_cutoff: 0.05
+  - ligand_rmsd:
+      train: true
+      params:
+        rmsd_threshold: 2.0
+  - volume_overlap:
+      train: true
+      params:
+        clash_cutoff: 0.05
+
+fixed_protein_ligand_pharmacophore_denovo_condensed:
   - validity:
       train: true
       params: {}
