@@ -329,18 +329,29 @@ def compute_metrics(system_pairs,
                 except Exception as e:
                     print(f"Invalid: Another error encountered during sanitization of generated ligand {i}: {e}")
 
+            true_lig = data['true_lig']
+            try:
+                Chem.SanitizeMol(true_lig)
+                
+            except Chem.rdchem.KekulizeException:
+                print(f"Invalid: Kekulization failed for true ligand")
+            except Chem.rdchem.MolSanitizeException:
+                print(f"Invalid: General sanitization failed for true ligand")
+            except Exception as e:
+                print(f"Invalid: Another error encountered during sanitization of true ligand: {e}")
+
             all_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(data['gen_ligs_ids'])
             valid_lig_rows = (metrics['sys_id'] == sys_id) & (metrics['protein_id'] == data['gen_prot_id']) & metrics['gen_ligand_id'].isin(valid_gen_lig_ids)
 
-            metrics[all_rows, 'RDKit_valid'] = False
-            metrics[valid_lig_rows, 'RDKit_valid'] = True
+            metrics.loc[all_rows, 'RDKit_valid'] = False
+            metrics.loc[valid_lig_rows, 'RDKit_valid'] = True
             
             # PoseBusters valid
             if metrics_to_run['pb_valid']:
                 results = run_with_timeout(pb_valid,
                                            timeout=timeout,
                                            gen_ligs=valid_gen_ligs, 
-                                           true_lig=data['true_lig'], 
+                                           true_lig=true_lig, 
                                            prot_file=data['gen_prot_file'], 
                                            task=task)
 
@@ -350,7 +361,7 @@ def compute_metrics(system_pairs,
                 
                 true_results = run_with_timeout(pb_valid,
                                                 timeout=timeout,
-                                                gen_ligs=data['true_lig'], 
+                                                gen_ligs=true_lig, 
                                                 true_lig=None, 
                                                 prot_file=data['gen_prot_file'], 
                                                 task=task)
@@ -375,7 +386,7 @@ def compute_metrics(system_pairs,
                 results_true = run_with_timeout(posecheck, 
                                                 timeout=timeout,
                                                 prot_file=data['true_prot_file'], 
-                                                ligs=[data['true_lig']])
+                                                ligs=[true_lig])
                 
                 if results_true is not None:
                     for name, val in results_true.items():
@@ -417,7 +428,7 @@ def compute_metrics(system_pairs,
                     results = run_with_timeout(rmsd, 
                                                timeout=timeout,
                                                gen_lig=gen_lig, 
-                                               true_lig=data['true_lig'])
+                                               true_lig=true_lig)
                     
                     if results is not None: 
                         lig_id = data['gen_ligs_ids'][i]
@@ -529,8 +540,11 @@ def write_system_pairs(g_list: List[dgl.DGLHeteroGraph],
         sys_gt_dir = output_dir / sys_name
 
         gen_ligs = [s.get_rdkit_ligand() for s in replicates]
-        true_lig = replicates[0].get_gt_ligand(g=g_list[sys_id].to('cpu'))
-       
+
+        for i, lig in enumerate(gen_ligs):
+            lig.SetProp("_Name", f"gen_ligands_{i}")
+
+        true_lig = replicates[0].get_gt_ligand(g=g_list[sys_id].to('cpu'))       
 
         if 'protein_structure' in task.groups_generated:
             # pair each generated ligand to generated protein
