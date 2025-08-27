@@ -199,10 +199,7 @@ class PharmitDataset(ZarrDataset):
             pharm_idxs = np.arange(start_idx, end_idx)
 
             if len(pharm_idxs) == 0:
-                print("Warning: No pharmacophores in this system.")
-                pharm_x = torch.tensor([])
-                pharm_a = torch.tensor([])
-                pharm_v = torch.tensor([])
+                print(f"Warning: No pharmacophores in system {index}.")
 
             else:
                 pharm_sample_size = np.random.randint(1, min(self.max_pharms_sampled, len(pharm_idxs)) + 1)
@@ -212,12 +209,12 @@ class PharmitDataset(ZarrDataset):
                 pharm_a = torch.from_numpy(np.stack([self.slice_array('pharm/node/a', i, i+1) for i in pharm_sample], axis=0)).long().squeeze(1)
                 pharm_v = torch.from_numpy(np.stack([self.slice_array('pharm/node/v', i, i+1) for i in pharm_sample], axis=0)).float().squeeze(1)
 
-            # add target pharmacophore data to graph
-            g_node_data['pharm'] =  {
-                'x_1_true': pharm_x, 
-                'a_1_true': pharm_a, 
-                'v_1_true': pharm_v
-            }
+                # add target pharmacophore data to graph
+                g_node_data['pharm'] =  {
+                    'x_1_true': pharm_x, 
+                    'a_1_true': pharm_a, 
+                    'v_1_true': pharm_v
+                }
 
         g = build_complex_graph(
             node_data=g_node_data, 

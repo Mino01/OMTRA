@@ -267,8 +267,8 @@ def pb_valid_pocket(
     return metrics
 
 
-@register_eval("reos_and_rings")
-def check_reos_and_rings(
+@register_eval("pharm_match")
+def check_pharm_match(
     sampled_systems: List[SampledSystem], params: Dict[str, Any]
 ) -> Dict[str, Any]:
-    return reos_and_rings(sampled_systems)
+    return compute_pharmacophore_match(sampled_systems)

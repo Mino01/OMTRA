@@ -395,12 +395,9 @@ class PlinderDataset(ZarrDataset):
 
             # TODO: what should we do if there are no interacting pharmacophores?
             if len(interacting_pharms) == 0:
-                print("Warning: No interacting pharmacophores in this system.")
-                coords = np.array([])
-                types = np.array([])
-                vectors = np.array([])
-                interactions = np.array([])
-
+                print(f"Warning: No interacting pharmacophores in system {index}.")
+                pharmacophore = None
+                
             else:
                 pharm_sample_size =  np.random.randint(1, min(self.max_pharms_sampled, len(interacting_pharms)) + 1)
                 pharm_sample = np.random.choice(interacting_pharms, size=pharm_sample_size, replace=False)
@@ -409,13 +406,13 @@ class PlinderDataset(ZarrDataset):
                 types = np.array([self.slice_array("pharmacophore/types", i, i+1) for i in pharm_sample]).squeeze(1)
                 vectors = np.array([self.slice_array("pharmacophore/vectors", i, i+1) for i in pharm_sample]).squeeze(1)
                 interactions = np.ones(len(pharm_sample), dtype=bool)
-            
-            pharmacophore = PharmacophoreData(
-                coords=coords,
-                types=types,
-                vectors=vectors,
-                interactions=interactions
-            )
+                
+                pharmacophore = PharmacophoreData(
+                    coords=coords,
+                    types=types,
+                    vectors=vectors,
+                    interactions=interactions
+                )
 
 
         system = SystemData(
@@ -958,7 +955,7 @@ class PlinderDataset(ZarrDataset):
         edge_idxs.update(lig_edge_idxs)
         edge_data.update(lig_edge_data)
 
-        if include_pharmacophore:
+        if include_pharmacophore and system.pharmacophore is not None:
             pharm_node_data, pharm_edge_idxs, pharm_edge_data = (
                 self.convert_pharmacophore(system.pharmacophore)
             )
