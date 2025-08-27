@@ -734,7 +734,6 @@ rigid_docking_pharmacophore_condensed:
       train: true
       params:
         clash_cutoff: 0.05
-
 fixed_protein_ligand_pharmacophore_denovo_condensed:
   - validity:
       train: true

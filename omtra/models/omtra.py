@@ -380,6 +380,9 @@ class OMTRA(pl.LightningModule):
             g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
         )
 
+        if g.num_nodes('pharm') == 0:
+            print('no pharm nodes!!')
+
         if self.distort_p > 0.0:
             t_mask = (t > 0.5)[node_batch_idxs["lig"]]
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
@@ -411,7 +414,7 @@ class OMTRA(pl.LightningModule):
                 # set the target to ignore_index when the feature is already unmasked in xt
                 
                 # Get masked atom index
-                fake_atoms = (self.fake_atom_p > 0.0) and ((modality.data_key == 'a') or ((modality.data_key == 'cond_a'))) # correction for atom type and fake atoms
+                fake_atoms = (self.fake_atom_p > 0.0) and ((modality.data_key == 'a') or ((modality.data_key == 'cond_a'))) and (modality.entity_name == 'lig') # correction for atom type and fake atoms
                 n_categories = modality.n_categories + int(fake_atoms) 
                 target[xt_idxs != n_categories] = -100
             targets[modality.name] = target
