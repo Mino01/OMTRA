@@ -75,6 +75,7 @@ class PlinderDataset(ZarrDataset):
         self.graph_config = graph_config
         self.prior_config = prior_config
         self.fake_atom_p = fake_atom_p
+        self.use_fake_atoms = self.fake_atom_p > 0
         self.pskip_factor = pskip_factor
         self.weighted_sampling = pskip_factor > 0.0 and split == 'train'
 
@@ -165,8 +166,12 @@ class PlinderDataset(ZarrDataset):
     def get_condensed_atom_typer(self):
         return CondensedAtomTyper(fake_atoms=self.fake_atom_p>0.0)
     
-    def get_system(
-        self, index: int, include_pharmacophore: bool, include_protein: bool, include_extra_feats: bool, condensed_atom_typing: bool
+    def get_system(self,
+                   index: int, 
+                   include_pharmacophore: bool, 
+                   include_protein: bool, 
+                   include_extra_feats: bool, 
+                   condensed_atom_typing: bool
     ) -> SystemData:
         system_info = self.system_lookup[
             self.system_lookup["system_idx"] == index
@@ -351,7 +356,7 @@ class PlinderDataset(ZarrDataset):
         if condensed_atom_typing:
             # Get extra ligand atom features
             lig_extra_feats = self.slice_array(f'ligand/extra_feats', lig_atom_start, lig_atom_end)
-            lig_extra_feats = lig_extra_feats[:, :-1]
+            lig_extra_feats = lig_extra_feats[:, :-1] # dangerous, implicit knowledge assumed about order/contents of extra_feats
 
             cond_a_typer = self.get_condensed_atom_typer()
 
@@ -961,7 +966,7 @@ class PlinderDataset(ZarrDataset):
             include_pharmacophore=include_pharmacophore,
             include_protein=include_protein,
             include_extra_feats=include_extra_feats,
-            condensed_atom_typing=condensed_atom_typing
+            condensed_atom_typing=condensed_atom_typing,
         )
 
         node_data, edge_idxs, edge_data, pocket_mask, bb_pocket_mask = (
@@ -1011,7 +1016,11 @@ class PlinderDataset(ZarrDataset):
             )
 
         # sample priors
-        g = sample_priors(g, task_class=task_class, prior_fns=prior_fns, training=True)
+        g = sample_priors(g, 
+                          task_class=task_class, 
+                          prior_fns=prior_fns, 
+                          training=True, 
+                          fake_atoms=self.use_fake_atoms)
 
         return g
 

@@ -147,7 +147,7 @@ class VectorField(nn.Module):
                 continue
             # if the modality is being generated, there is an extra mask token
             is_generated = m.name in modality_generated_space
-            has_fake_atoms = (m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms # TODO: this breaks if using latent atom types + fake atoms
+            has_fake_atoms = (m.name == 'lig_a' or m.name == 'lig_cond_a') and self.fake_atoms 
             self.token_embeddings[m.name] = nn.Embedding(
                 m.n_categories + int(is_generated) + int(has_fake_atoms), token_dim
             )
@@ -786,6 +786,7 @@ class VectorField(nn.Module):
         tspan=None,
         visualize=False,
         extract_latents_for_confidence=False,
+        time_spacing: str = "even",
         **kwargs,
     ):
         # TODO: adapt flowmol integrate for hetero version
@@ -795,7 +796,14 @@ class VectorField(nn.Module):
             cat_temp_func = self.cat_temp_func
 
         if tspan is None:
-            t = torch.linspace(0, 1, n_timesteps, device=g.device)
+            if time_spacing == "even":
+                t = torch.linspace(0, 1, n_timesteps, device=g.device)
+            elif time_spacing == "uneven":
+                # log-dense near t=1, then normalize to [0,1]
+                t = 1.0 - torch.logspace(-2, 0, steps=n_timesteps + 1, device=g.device).flip(0)
+                t = (t - t.min()) / (t.max() - t.min())  # vector-wise normalization
+            else:
+                raise ValueError(f"Unknown time_spacing: {time_spacing}")
         else:
             t = tspan
 
@@ -1028,7 +1036,7 @@ class VectorField(nn.Module):
             # TODO: other discrete sampling methods?
             # TODO: path planning, probably in place of purity sampling
             # TODO: campbell step assumes alpha_t = 1 - beta_t; need to change behavior if this is ever not the case
-            has_fake_atoms = (self.fake_atoms) and ((m.data_key == 'a') or ((m.data_key == 'cond_a')))
+            has_fake_atoms = self.fake_atoms and m.name in ['lig_a', 'lig_cond_a']
             n_categories = m.n_categories + int(has_fake_atoms)
 
             xt, x_1_sampled = self.campbell_step(
