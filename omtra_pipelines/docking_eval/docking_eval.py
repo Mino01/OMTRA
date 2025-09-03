@@ -721,7 +721,13 @@ def main(args):
                                           output_dir=samples_dir)
     else:
         samples_dir = args.samples_dir
-        sys_info =pd.read_csv(f"{samples_dir}/{task_name}_sys_info.csv")
+        
+        try:
+            sys_info = pd.read_csv(f"{samples_dir}/{task_name}_sys_info.csv")
+        except Exception as e:  # case where we didn't generate a system info file
+            print(f'Could not find system info csv at {samples_dir}/{task_name}_sys_info.csv')
+            sys_info = None
+
         system_pairs = system_pairs_from_path(samples_dir=samples_dir,
                                               task=task,
                                               n_samples=args.n_samples,
@@ -738,7 +744,8 @@ def main(args):
                               output_dir=samples_dir,
                               timeout=args.timeout)        
 
-    metrics = pd.merge(metrics, sys_info, on='sys_id', how='left')
+    if sys_info is not None:
+        metrics = pd.merge(metrics, sys_info, on='sys_id', how='left')
     metrics.to_csv(f"{output_dir}/{task_name}_metrics.csv", index=False)
 
 if __name__ == "__main__":
