@@ -124,31 +124,22 @@ def sample_n_lig_atoms_plinder(n_prot_atoms: torch.Tensor = None, n_pharms: torc
             p = p_joint.sum(axis=2) # has shape (n_ligand_atoms_support, n_pharms_support)
             p = p.unsqueeze(0).expand(n_pharms.shape[0], -1, -1) # has shape (n_samples, n_ligand_atoms_support, n_pharms_support)
 
+
         if n_pharms is not None:
-            p_new = torch.zeros((p.shape[0], p.shape[1]), dtype=p.dtype, device=p.device)
-
-            zero_pharm_idxs = (n_pharms == 0).nonzero(as_tuple=True)[0] # index of all systems with 0 pharmacophores
-            if len(zero_pharm_idxs) > 0:
-                p_new[zero_pharm_idxs] = p[zero_pharm_idxs].sum(dim=-1)   # marginalize over all n_pharms for these samples
+            # vectorized masking
+            mask = supports['n_pharms'].unsqueeze(0) >= n_pharms.unsqueeze(1)   # (n_samples, n_pharms_support)
+            mask = mask.unsqueeze(1).expand(-1, p.shape[1], -1)     # expand to match ligand atoms dimension: (n_samples, n_ligand_atoms_support, n_pharms_support)
             
-            nonzero_pharm_idxs = (n_pharms > 0).nonzero(as_tuple=True)[0] # index of all systems with >0 pharmacophores
-            if len(nonzero_pharm_idxs) > 0:
-                # find corresponding indicies for the number of pharmacophores provided
-                pharm_idxs = torch.searchsorted(supports['n_pharms'], n_pharms[nonzero_pharm_idxs])
+            # marginalize by summing over valid n_pharms indices
+            p = (p * mask).sum(dim=-1)  # (n_samples, n_ligand_atoms_support)
 
-                # verify all values exist in support
-                if not torch.all(supports['n_pharms'][pharm_idxs] == n_pharms[nonzero_pharm_idxs]):
-                    raise ValueError("Some n_pharms are not in the support of the distribution")
-                p_new[nonzero_pharm_idxs] = p[nonzero_pharm_idxs, :, pharm_idxs]    # has shape (n_samples, n_ligand_atoms_support)
-            
-            p = p_new
-
-            # # find corresponding indicies for the number of pharmacophores provided
+            # find corresponding indicies for the number of pharmacophores provided
             # n_pharms_idxs = torch.searchsorted(supports['n_pharms'], n_pharms)
             # if not torch.all(supports['n_pharms'][n_pharms_idxs] == n_pharms):
             #     raise ValueError("n_pharms must be in the support of the distribution")
             
             # p = p[sample_idxs, :, n_pharms_idxs] # has shape (n_samples, n_ligand_atoms_support)
+
         else:
             # n_pharms is not specified so we marginalize over n_pharms
             p = p.sum(axis=-1) # has shape (n_samples, n_ligand_atoms_support)
