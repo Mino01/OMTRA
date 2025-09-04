@@ -69,7 +69,6 @@ def sample_n_lig_atoms_pharmit(n_pharms: torch.Tensor = None, n_samples: int = N
     joint_dist = pharmit_n_nodes_dist_smoothed()
     p_joint = joint_dist['smoothed_density'] # has shape (n_ligand_atoms_support, n_pharms_support)
     supports = joint_dist['supports']
-    print('p_joint', p_joint.shape, flush=True)
 
     if n_pharms is not None:        
         n_pharms_idxs = torch.searchsorted(supports['n_pharms'], n_pharms)
