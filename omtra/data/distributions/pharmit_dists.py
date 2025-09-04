@@ -70,13 +70,18 @@ def sample_n_lig_atoms_pharmit(n_pharms: torch.Tensor = None, n_samples: int = N
     p_joint = joint_dist['smoothed_density'] # has shape (n_ligand_atoms_support, n_pharms_support)
     supports = joint_dist['supports']
 
-    if n_pharms is not None:
+    if n_pharms is not None:        
+        n_pharms_idxs = torch.searchsorted(supports['n_pharms'], n_pharms)
+
+        if not torch.all(supports['n_pharms'][n_pharms_idxs] == n_pharms):
+             raise ValueError("n_pharms must be in the support")
+
         # vectorized masking
-        mask = supports['n_pharms'].unsqueeze(0) >= n_pharms.unsqueeze(1)   # (n_samples, n_pharms_support)
+        mask_cols = torch.arange(p_joint.shape[1]).unsqueeze(0) # (1, n_pharms_support)
+        mask = mask_cols >= n_pharms_idxs.unsqueeze(1)           # (n_samples, n_pharms_support)        
         mask = mask.unsqueeze(1).expand(-1, p_joint.shape[0], -1)   # expand to match ligand atoms dimension: (n_samples, n_ligand_atoms_support, n_pharms_support)
         
-        p = p_joint.unsqueeze(0).expand(n_samples, -1, -1)   # expand p_joint to batch dimension: (n_samples, n_ligand_atoms_support, n_pharms_support)
-
+        p = p_joint.unsqueeze(0).expand(n_pharms.shape[0], -1, -1)   # expand p_joint to batch dimension: (n_samples, n_ligand_atoms_support, n_pharms_support)
         # marginalize by summing over valid n_pharms indices
         p = (p * mask).sum(dim=-1)  # (n_samples, n_ligand_atoms_support)
 
