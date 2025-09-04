@@ -60,3 +60,23 @@ protein_ligand_denovo_condensed:
   npnde_x:
     type: target_dependent_gaussian
 
+denovo_ligand_from_pharmacophore_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: True
+  lig_e_condensed:
+    type: masked
+  lig_cond_a:
+    type: masked
+ligand_conformer_from_pharmacophore_condensed:
+  lig_x:
+    type: gaussian
+    params:
+      std: 2.573
+      ot: True
+      permutation: False
+  lig_cond_a:
+    type: masked
+
