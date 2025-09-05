@@ -9,7 +9,11 @@ from omtra.priors.align import align_prior
 from typing import Union, Tuple, List
 
 @register_train_prior("gaussian")
-def gaussian_train(x1: torch.Tensor, std: float = 1.0, ot=False, permutation=True):
+def gaussian_train(x1: torch.Tensor, std: float = 1.0, 
+        ot=False, 
+        rigid_body=True,
+        permutation=True, 
+        translation=False):
     """
     Generate a prior feature by sampling from a Gaussian distribution.
     """
@@ -22,7 +26,13 @@ def gaussian_train(x1: torch.Tensor, std: float = 1.0, ot=False, permutation=Tru
         x0 += x1_mean - x0_mean
 
         # align x0 to x1
-        x0 = align_prior(x0, x1, rigid_body=True, permutation=permutation)
+        x0 = align_prior(x0, x1, rigid_body=rigid_body, permutation=permutation)
+    
+    if translation:
+        # move x0 to the same COM as x1
+        x0_mean = x0.mean(dim=0, keepdim=True)
+        x1_mean = x1.mean(dim=0, keepdim=True)
+        x0 += x1_mean - x0_mean
 
     return x0
 

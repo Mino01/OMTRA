@@ -380,9 +380,6 @@ class OMTRA(pl.LightningModule):
             g, task_class, t, node_batch_idxs, edge_batch_idxs, lig_ue_mask
         )
 
-        if g.num_nodes('pharm') == 0:
-            print('no pharm nodes!!')
-
         if self.distort_p > 0.0:
             t_mask = (t > 0.5)[node_batch_idxs["lig"]]
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
