@@ -1014,10 +1014,15 @@ class VectorField(nn.Module):
             vf = self.vector_field(x_t, x_1, alpha_t_i[m.name], alpha_t_prime_i[m.name], beta_t_i[m.name], beta_t_prime_i[m.name])
 
             if stochastic_sampling:
-                g_t = 1 / (t_i + eps)  # g(t_n-1)
-                g_s = 1 / (s_i + eps)  # g(t_n)
+                g_t = 1 / (t_i + eps) if t_i < 0.90 else 0.0  # g(t_n-1)
+                g_s = 1 / (s_i + eps) if s_i < 0.90 else 0.0  # g(t_n)
                 score = (t_i * vf - x_t) / (1 - t_i)    # score(x_t_n-1, z)
                 noise = torch.randn_like(x_t)
+
+                # print(f"t_n:{t_i},\t dt: {dt},\t g(t_n-1): {g_t}")
+                # print((vf + g_t*score)*dt)
+                # print(f"{m.data_key}: {x_t + (vf + g_t*score)*dt + torch.sqrt(2 * dt * g_s * noise_scaler) * noise}")
+                # print(f"---")
 
                 data_src[m.entity_name].data[f"{m.data_key}_t"] = x_t + (vf + g_t*score)*dt + torch.sqrt(2 * dt * g_s * noise_scaler) * noise
 
