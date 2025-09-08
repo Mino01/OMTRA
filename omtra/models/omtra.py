@@ -837,7 +837,7 @@ class OMTRA(pl.LightningModule):
         eps: float = 0.01,
     ) -> List[SampledSystem]:
         
-        n_samples = len(g_list)
+        n_samples = len(g_list) if g_list is not None else 1
         
         reps_per_batch = min(max_batch_size // n_samples, n_replicates)
         n_full_batches = n_replicates // reps_per_batch
