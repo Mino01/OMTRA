@@ -77,6 +77,7 @@ class OMTRA(pl.LightningModule):
         t_alpha: float = 1.8,
         cat_loss_weight: float = 1.0,
         time_scaled_loss: bool = False,
+        pharm_var: float = 0.0,
 
     ):
         super().__init__()
@@ -98,6 +99,7 @@ class OMTRA(pl.LightningModule):
         self.zero_bo_loss_weight = zero_bo_loss_weight
         self.aux_loss_cfg = aux_losses
         self.cat_loss_weight = cat_loss_weight
+        self.pharm_var = pharm_var
 
         self.total_loss_weights = total_loss_weights
         # TODO: set default loss weights? set canonical order of features?
@@ -386,6 +388,10 @@ class OMTRA(pl.LightningModule):
             distort_mask = torch.rand(g.num_nodes("lig"), 1, device=g.device) < self.distort_p
             distort_mask = distort_mask & t_mask.unsqueeze(-1)
             g.nodes["lig"].data['x_t'] = g.nodes["lig"].data['x_t'] + torch.randn_like(g.nodes["lig"].data['x_t'])*distort_mask*0.5
+        
+        # add noise to pharmacophore coordinates
+        if self.pharm_var > 0.0:
+            g.nodes["pharm"].data['x_1_true'] = g.nodes["pharm"].data['x_1_true'] + torch.randn_like(g.nodes["pharm"].data['x_1_true']) * self.pharm_var**2
 
         # forward pass for the vector field
         vf_output = self.vector_field.forward(
@@ -844,11 +850,8 @@ class OMTRA(pl.LightningModule):
         last_batch_reps = n_replicates % reps_per_batch
 
         sampled_systems = [[] for _ in range(n_samples)]
-        #sample_names = []
 
         for i in range(n_full_batches):
-            #sample_names += [f"sys_{sys_idx}_rep_{(i*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(reps_per_batch)]
-
             batch_results = self.sample(g_list=g_list,
                                         n_replicates=reps_per_batch,
                                         task_name=task_name,
@@ -870,8 +873,6 @@ class OMTRA(pl.LightningModule):
             
         # last batch
         if last_batch_reps > 0:
-            #sample_names += [f"sys_{sys_idx}_rep_{(n_full_batches*reps_per_batch)+rep_idx}" for sys_idx in range(n_samples) for rep_idx in range(last_batch_reps)]
-
             batch_results = self.sample(g_list=g_list,
                                         n_replicates=last_batch_reps,
                                         task_name=task_name,
