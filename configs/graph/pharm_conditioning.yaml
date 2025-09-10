@@ -31,42 +31,15 @@ edges:             # parameter for KNN edges
     type: knn
     params:
       k: 15
-  # prot_res_to_lig:
-  #   type: radius
-  #   params:
-  #     r: 8
-  # lig_to_prot_res:
-  #   type: knn
-  #   params:
-  #     k: 3
   prot_atom_to_npnde:
     type: radius
     params:
-      r: 8
-  npnde_to_prot_atom:
-    type: knn
-    params:
-      k: 5
-  # prot_res_to_npnde:
-  #   type: radius
-  #   params:
-  #     r: 8
-  # npnde_to_prot_res:
-  #   type: knn
-  #   params:
-  #     k: 3
+      r: 4.5
   pharm_to_prot_atom:
     type: radius
     params:
       r: 4.5
-  # prot_res_to_pharm:
-  #   type: radius
-  #   params:
-  #     r: 8
-  # pharm_to_prot_res:
-  #   type: knn
-  #   params:
-  #     k: 3
+
   
 
 # enforce certain edge types are symmetric
@@ -75,6 +48,7 @@ symmetric_etypes:
   - npnde_to_pharm     
   - lig_to_npnde
   - pharm_to_prot_atom
+  - prot_atom_to_npnde
 
 
 cov_prot_edges: true
