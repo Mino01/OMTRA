@@ -33,6 +33,7 @@ logger = setup_logger(
     __name__,
 )
 logging.getLogger().setLevel(logging.CRITICAL)
+crossdocked_invalid_tuples = [(6, 0, 0, 0, 7, 0, 1)] #we throw out systems with these tuples
 class CrossdockedNoLinksZarrConverter:
     def __init__(
         self,
@@ -536,8 +537,10 @@ class CrossdockedNoLinksZarrConverter:
                 
                 result = processor.process_system(save_pockets=False)
                 if result:
-                    sysdata = result["systems_list"]
-                    system_data_list.append(sysdata)
+                    # Check for invalid tuples in extra ligand features (only append if no invalid tuples)
+                    if self.invalid_tuple_check(result) == False: #means there isnt an invalid tuple
+                        sysdata = result["systems_list"]
+                        system_data_list.append(sysdata)
             except Exception as e:
                 logger.critical(f"Error processing system {rec_path}, {lig_path}: {e}")
                 logger.critical(traceback.format_exc())
@@ -797,3 +800,22 @@ class CrossdockedNoLinksZarrConverter:
             self.write_queue()
 
         progressBar.close()
+    
+    def invalid_tuple_check(self, result: Dict[str, Any]) -> bool:
+        # Check if the ligand has any of the invalid tuples
+        ligand_data = result['systems_list'].ligand
+
+        atom_feature_tuples = list(zip(
+            ligand_data.atom_types,
+            ligand_data.atom_charges, 
+            ligand_data.atom_impl_H,
+            ligand_data.atom_aro,
+            ligand_data.atom_hyb,
+            ligand_data.atom_ring,
+            ligand_data.atom_chiral
+        ))
+        for ligand_tuple in atom_feature_tuples:
+            if ligand_tuple in crossdocked_invalid_tuples:
+                logger.warning(f"Skipping system {result['systems_list'].system_id} due to invalid ligand tuple: {ligand_tuple}")
+                return True #invalid tuple found
+        return False #no invalid tuple found
