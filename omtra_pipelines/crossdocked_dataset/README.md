@@ -5,8 +5,11 @@ The dataset includes internal splits (created by our lab using `.types` files) a
 
 The fully processed data can be located at: 
 
-External Splits: /net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split
-Internal Splits: 
+**External Splits:** /net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split
+**Internal Splits:** 
+
+## File Directory
+
 
 
 ## External Split Processing
@@ -95,6 +98,95 @@ The internal splits use predefined train/val pairs from the Crossdocked dataset'
 
 ### File Structure
 
+The `.types` files contain tab/space-separated lines where each line represents a protein-ligand pair. The format is:
+
+#### Example Entry
+
+1 0.0000 1.1921 1A1D_CYBSA_1_341_0/1j0c_A_rec_0.gninatypes 1A1D_CYBSA_1_341_0/1j0c_A_rec_1j0d_5pa_lig_tt_min_0.gninatypes #-9.1514
+
+- **Column 1**: Label (must be "1" for valid entries)
+- **Column 2**: Numerical value 
+- **Column 3**: Numerical value
+- **Column 4**: Relative path to receptor `.gninatypes` file
+- **Column 5**: Relative path to ligand `.gninatypes` file
+- **Comment**: Binding affinity value (e.g., #-9.1514)
+
+#### Processing Notes
+- Only lines starting with "1" are processed (valid entries)
+- File paths are relative to the dataset root directory
+- Both receptor and ligand files must exist for the pair to be included
+- Lines with fewer than 5 columns are skipped
+- Files use `.gninatypes` format (GNINA's input format)
+
+#### Types Files Used
+The internal split processing uses three predefined types file pairs. Each pair represents a complete train/validation split, resulting in three separate internal splits (split0, split1, split2) for training.
+```python
+types_files_pairs = [
+    ("it2_tt_v1.3_0_train0.types", "it2_tt_v1.3_0_test0.types"),
+    ("it2_tt_v1.3_0_train1.types", "it2_tt_v1.3_0_test1.types"),
+    ("it2_tt_v1.3_0_train2.types", "it2_tt_v1.3_0_test2.types")
+]
+```
+### Internal Split Dataset Sizes
+
+| Split | Training Set | Test Set | Total |
+|-------|-------------|----------|-------|
+| Split 0 | 14,429,208 | 8,137,241 | 22,566,449 |
+| Split 1 | 15,103,135 | 7,463,314 | 22,566,449 |
+| Split 2 | 15,600,555 | 6,965,894 | 22,566,449 |
+
+*Note: These numbers represent the total lines in each `.types` file, including both valid and invalid entries. The actual number of processed receptor-ligand pairs may be lower after filtering for valid entries.*
+
+### Processing Script Overview
+
+The main processing script is `run_crossdocked_processing.py` which:
+- Loads all 6 types file shown above
+- Processes protein-ligand pairs in parallel batches
+- Outputs processed data to Zarr format for training and validation
+
+### Command Line Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--cd_directory` | `/net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types` | Crossdocked types file directory |
+| `--pocket_cutoff` | `8.0` | Pocket cutoff distance (Angstroms) |
+| `--zarr_output_dir` | `test_external_output.zarr` | Output directory for processed Zarr files |
+| `--root_dir` | `/net/galaxy/home/koes/paf46_shared/cd2020_v1.3` | Root directory for crossdocked data |
+| `--max_batches` | `None` | Maximum number of batches to process (None = all) |
+| `--batch_size` | `500` | Number of ligand-receptor pairs per batch |
+| `--n_cpus` | `8` | Number of CPUs for parallel processing |
+| `--max_pending` | `32` | Maximum pending jobs in the processing pool |
+
+### Example Running with SLURM
+
+Create a SLURM script:
+```bash
+#!/bin/bash
+#SBATCH -J crossdocked
+#SBATCH --partition=dept_cpu
+#SBATCH -o slurm_output/crossdocked_processing/%A_%a.out
+#SBATCH -e slurm_output/crossdocked_processing/%A_%a.out
+#SBATCH --cpus-per-task 18
 
 
 
+hostname
+
+source ~/.bashrc
+mamba activate omtra
+
+# write your command line commands here
+python omtra_pipelines/crossdocked_dataset/run_crossdocked_processing_external_splits.py \
+  --cd_directory /net/galaxy/home/koes/paf46_shared/cd2020_v1.3/types \
+  --pocket_cutoff 8.0 \
+  --zarr_output_dir /net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split \
+  --root_dir /net/galaxy/home/koes/paf46_shared/cd2020_v1.3 \
+  --max_batches None \
+  --batch_size 500 \
+  --n_cpus 16 \
+  --max_pending 32
+
+
+#eval $cmd
+exit
+```
