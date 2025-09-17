@@ -3,7 +3,7 @@ import torch.nn.functional as fn
 import torch.nn as nn
 import pytorch_lightning as pl
 import dgl
-from typing import Dict, List, Callable, Tuple, Optional
+from typing import Dict, List, Callable, Tuple, Optional, Union
 from collections import defaultdict
 import wandb
 import itertools
@@ -592,8 +592,8 @@ class OMTRA(pl.LightningModule):
         stochastic_sampling: bool = False,
         noise_scaler: float = 1.0,
         eps: float = 0.01,
-        use_gt_n_lig_atoms: bool = False,
-        n_lig_atom_margin: float = 0.15
+        # use_gt_n_lig_atoms: bool = False,
+        n_lig_atom_margin: Union[float, None] = None,
 
     ) -> List[SampledSystem]:
         task: Task = task_name_to_class(task_name)
@@ -611,6 +611,8 @@ class OMTRA(pl.LightningModule):
 
         if unconditional_n_atoms_dist is None:
             unconditional_n_atoms_dist = self.infer_n_atoms_dist(task)
+
+        use_gt_n_lig_atoms = n_lig_atom_margin is not None
 
         # unless this is a completely and totally unconditional task, the user
         # has to provide the conditional information in the graph

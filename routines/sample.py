@@ -120,6 +120,12 @@ def parse_args():
         default=0.01,
         help="Scaling factor for noise (stochasticity)"
     )
+    p.add_argument(
+        '--n_lig_atom_margin',
+        type=float,
+        default=None,
+        help='If set, number of atoms in the ligand will be +/- this margin from number of atoms in the ground truth ligand'
+    )
     p.add_argument('--split', type=str, default='val', help='Which data split to use')
 
     p.add_argument("--metrics", action="store_true", help="If set, compute metrics for the samples")
@@ -319,6 +325,7 @@ def main(args):
         stochastic_sampling=args.stochastic_sampling,
         noise_scaler=args.noise_scaler, # for stochastic sampling 
         eps=args.eps,
+        n_lig_atom_margin=args.n_lig_atom_margin
     )
 
     if args.output_dir is None:
