@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument(
         '--crossdocked_path',
         type=Path,
-        default=Path(omtra_root()) / 'data' / 'crossdocked',
+        default=Path(omtra_root()) / 'data' / 'crossdocked' / 'external_split',
         help='Path to crossdocked dataset'
     )
     parser.add_argument('--dataset_start_idx', type=int, default=0, help='Index to start sampling from')
