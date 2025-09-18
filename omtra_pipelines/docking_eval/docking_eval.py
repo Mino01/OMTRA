@@ -70,7 +70,7 @@ def parse_args():
     # --- Metrics computation options ---
     metrics = p.add_argument_group("Metrics Options")
 
-    metrics.add_argument("--timeout", type=int, default=1200, help='Maximum running time in seconds for any eval metric.',)
+    metrics.add_argument("--timeout", type=int, default=1800, help='Maximum running time in seconds for any eval metric.',)
     metrics.add_argument("--disable_pb_valid", action="store_true",  help='Disables PoseBusters validity check.', )    
     metrics.add_argument("--disable_gnina", action="store_true", help='Disables GNINA docking score calculation.')    
     metrics.add_argument("--disable_posecheck", action="store_true", help='Disables strain, clashes, and pocket-ligand interaction computation.')
@@ -295,28 +295,26 @@ def run_with_timeout(func, *args, timeout, **kwargs):
     if p.is_alive():
         p.terminate()
         p.join()
-        print(f"[TIMEOUT] {func.__name__} killed after {timeout}s \n", flush=True)
+        print(f"\n[TIMEOUT] {func.__name__} killed after {timeout}s \n", flush=True)
         return None
 
     result = q.get() if not q.empty() else None
     if isinstance(result, Exception):
-        print(f"[ERROR] {func.__name__} failed: {result} \n", flush=True)
+        print(f"\n[ERROR] {func.__name__} failed: {result} \n", flush=True)
         return None
     return result
 
 
-def repair_and_sanitize(mol, i):
-    for atom in mol.GetAtoms():
-        atom.SetNumRadicalElectrons(0)
-        atom.SetNoImplicit(False)
+def repair_and_sanitize(lig, i):
     try:
-        Chem.SanitizeMol(mol)
-        Chem.Kekulize(mol, clearAromaticFlags=False)
-        mol = remove_radicals(mol)
+        Chem.SanitizeMol(lig)
     except Exception as e:
         print(f"An error occurred during sanitization of ligand {i}: {e}")
         return None
-    return mol
+    if any(atom.GetNumRadicalElectrons() > 0 for atom in lig.GetAtoms()):
+        print(f"Ligand {i} has a radical")
+        #return None
+    return lig
 
 def compute_metrics(system_pairs: List[SampledSystem], 
                     task: Task, 
@@ -385,6 +383,19 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 if pb_results is not None:
                     pb_results.index = valid_lig_indices
                     metrics.loc[valid_lig_indices, pb_results.columns] = pb_results
+                else:
+                    for i, gen_lig in enumerate(valid_gen_ligs):
+                        pb_result_single = run_with_timeout(pb_valid, 
+                                                            timeout=600, 
+                                                            gen_ligs=gen_lig,
+                                                            true_lig=true_lig, 
+                                                            prot_file=data['gen_prot_file'], 
+                                                            task=task)
+                        
+                        if pb_result_single is not None:
+                            metrics.loc[(sys_id, data['gen_prot_id'], valid_gen_lig_ids[i]), pb_result_single.columns] = pb_result_single.iloc[0].values
+                        else:
+                            print(f"Could not resolve PoseBusters eval on single generated ligand {valid_gen_lig_ids[i]}")
                 
                 if metrics_to_run['ground_truth']:
                     pb_true_results = run_with_timeout(pb_valid,
@@ -413,6 +424,20 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 if posechk_results is not None:
                     posechk_results = pd.DataFrame(posechk_results, index=valid_lig_indices)
                     metrics.loc[valid_lig_indices, posechk_results.columns] = posechk_results
+                else:
+                    for i, gen_lig in enumerate(valid_gen_ligs):
+                        posechk_result_single = run_with_timeout(posecheck, 
+                                                                 timeout=600,
+                                                                 ligs=[gen_lig],
+                                                                 prot_file=data['gen_prot_file'],
+                                                                 true_lig=true_lig,
+                                                                 true_prot_file=data['true_prot_file'],
+                                                                 interaction_recovery=metrics_to_run['interaction_recovery'])
+
+                        if posechk_result_single is not None:
+                            metrics.loc[(sys_id, data['gen_prot_id'], valid_gen_lig_ids[i]), list(posechk_result_single.keys())] = pd.Series({k: v[0] for k, v in posechk_result_single.items()})
+                        else:
+                            print(f"Could not resolve PoseCheck eval on single generated ligand {valid_gen_lig_ids[i]}")  
 
                 # ground truth ligand
                 if metrics_to_run['ground_truth']:
@@ -460,7 +485,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 for i, gen_lig in enumerate(data['gen_ligs']):
                     rmsd_results = None
                     rmsd_results = run_with_timeout(rmsd,
-                                                    timeout=timeout,
+                                                    timeout=600,
                                                     gen_lig=gen_lig,
                                                     true_lig=true_lig)
                 
@@ -471,7 +496,7 @@ def compute_metrics(system_pairs: List[SampledSystem],
             if metrics_to_run['pharm_match']:
                 pharm_results = run_with_timeout(compute_pharmacophore_match,
                                                  timeout=timeout,
-                                                 gen_ligs=valid_gen_ligs,
+                                                 gen_ligs=valid_gen_ligs,   # TODO: will this work if we pass all ligands not just the RDKit valid ones?
                                                  true_pharm=data['true_pharm'])
                 
                 pharm_results = pd.DataFrame(pharm_results, index=valid_lig_indices)
@@ -528,7 +553,8 @@ def sample_system(ckpt_path: Path,
         # system info
         sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
         sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in sys_info['system_idx']]
-        sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'sys_id']]
+        sys_info['n_gt_lig_atoms'] =  sys_info['lig_atom_end'] - sys_info['lig_atom_start']
+        sys_info = sys_info.loc[:, ['system_id', 'ligand_id', 'ccd', 'n_gt_lig_atoms', 'sys_id']]
 
     elif dataset == 'crossdocked':
 
@@ -542,7 +568,8 @@ def sample_system(ckpt_path: Path,
 
         # system info
         sys_info = dataset.system_lookup[dataset.system_lookup["system_idx"].isin(dataset_idxs)].copy()
-        sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb']]
+        sys_info['n_gt_lig_atoms'] = sys_info['lig_atom_end'] - sys_info['lig_atom_start']
+        sys_info = sys_info.loc[:, ['lig_sdf', 'rec_pdb', 'n_gt_lig_atoms']] 
         sys_info['lig_id'] = sys_info['lig_sdf'].apply(lambda x: Path(Path(x).stem).stem)
 
         # sort systems
