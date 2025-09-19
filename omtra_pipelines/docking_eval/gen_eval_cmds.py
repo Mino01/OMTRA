@@ -23,6 +23,12 @@ def parse_args():
         help="Default number of samples if not specified in config"
     )
     parser.add_argument(
+        "--sys_idx_file",
+        type=Path,
+        default=None,
+        help="Path to a file with system indexes."
+    )
+    parser.add_argument(
         "--default_n_replicates", 
         type=int,
         default=1,
@@ -31,7 +37,7 @@ def parse_args():
     parser.add_argument(
         "--default_dataset",
         type=str,
-        default="pharmit",
+        default="plinder",
         help="Default dataset if not specified in config"
     )
     parser.add_argument(
@@ -43,7 +49,13 @@ def parse_args():
     parser.add_argument(
         "--sample_script_path",
         type=Path,
-        default=Path(__file__).parent / "sample.py",
+        default=Path(__file__).parent / "docking_eval.py",
+        help="Path to the docking_eval.py script"
+    )
+    parser.add_argument(
+        "--docking_eval_script_path",
+        type=Path,
+        default=Path(__file__).parent / "docking_eval.py",
         help="Path to the sample.py script"
     )
     parser.add_argument(
@@ -53,18 +65,31 @@ def parse_args():
         help='Path to plinder dataset'
     )
     parser.add_argument(
-        '--pharmit_path',
-        type=Path,
-        default = Path(omtra_root()) / 'data' / 'pharmit',
-        help='Path to pharmit dataset'
-    )
-    parser.add_argument(
         '--crossdocked_path',
         type=Path,
-        default=Path(omtra_root()) / 'data' / 'crossdocked' / 'external_split',
+        default='/net/galaxy/home/koes/jmgupta/omtra_2/data/crossdocked/external_split',
         help='Path to crossdocked dataset'
     )
-    parser.add_argument('--dataset_start_idx', type=int, default=0, help='Index to start sampling from')
+    parser.add_argument('--dataset_start_idx', 
+        type=int, 
+        default=None, 
+        help='Index to start sampling from'
+    )
+    parser.add_argument('--split', 
+        type=str, 
+        default='test', 
+        help='Data split.'
+    )
+    parser.add_argument('--max_batch_size', 
+        type=int, 
+        default=300, 
+        help='Maximum batch size for batched model sampling.'
+    )
+    parser.add_argument('--timeout', 
+        type=int, 
+        default=2700, 
+        help='Amount of time in seconds to wait before timing out eval metric.'
+    )
     
     return parser.parse_args()
 
@@ -135,6 +160,11 @@ def load_config(config_file: Path) -> List[Dict[str, Any]]:
     
     return config
 
+def add_if_not_none(cmd_parts, flag, value):
+    """Helper: only add flag and value if not None."""
+    if value is not None:
+        cmd_parts.extend([flag, str(value)])
+    return cmd_parts
 
 def generate_commands(
     config: List[Dict[str, Any]], 
@@ -144,38 +174,76 @@ def generate_commands(
     commands = []
     
     for item in config:
+
         model_dir = Path(item['model_dir'])
+        try:
+            samples_dir = item['samples_dir']
+        except Exception:
+            samples_dir = None
         tasks = item['tasks']
         
         # Get optional parameters with defaults
         n_samples = item.get('n_samples', args.default_n_samples)
         n_replicates = item.get('n_replicates', args.default_n_replicates)
         dataset = item.get('dataset', args.default_dataset)
+        split = item.get('split', args.split)
         dataset_start_idx = item.get('dataset_start_idx', args.dataset_start_idx)
+        max_batch_size = item.get('max_batch_size', args.max_batch_size)
+        timeout = item.get('timeout', args.timeout)
+        sys_idx_file = item.get('sys_idx_file', args.sys_idx_file)
         
-        try:
-            checkpoint_path = find_best_checkpoint(model_dir)
-        except FileNotFoundError as e:
-            print(f"Warning: {e}")
-            continue
+
+        if samples_dir is None:
+            try:
+                checkpoint_path = find_best_checkpoint(model_dir)
+            except FileNotFoundError as e:
+                print(f"Warning: {e}")
+                continue
         
-        # Generate one command per task for this model
-        for task in tasks:
-            cmd_parts = [
-                "python", str(args.sample_script_path),
-                str(checkpoint_path),
-                "--task", task,
-                "--dataset", dataset,
-                "--n_samples", str(n_samples),
-                "--n_replicates", str(n_replicates),
-                "--pharmit_path", str(args.pharmit_path),
-                "--plinder_path", str(args.plinder_path),
-                "--crossdocked_path", str(args.crossdocked_path),
-                "--dataset_start_idx", str(dataset_start_idx),
-                "--use_gt_n_lig_atoms",
-            ]
-            
-            commands.append(" ".join(cmd_parts))
+            # Generate one command per task for this model
+            for task in tasks:
+                cmd_parts = [
+                    "python", str(args.sample_script_path),
+                    "--ckpt_path", str(checkpoint_path),
+                    "--task", task,
+                    "--dataset", dataset,
+                    "--split", str(split),
+                    "--n_samples", str(n_samples),
+                    "--n_replicates", str(n_replicates),
+                    "--plinder_path", str(args.plinder_path),
+                    "--crossdocked_path", str(args.crossdocked_path),
+                    "--max_batch_size", str(max_batch_size),
+                    "--timeout", str(timeout),
+                ]
+
+                add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
+                add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
+                
+                commands.append(" ".join(cmd_parts))
+        else:
+            # Generate one command per task for this model
+            for task in tasks:
+                cmd_parts = [
+                    "python", str(args.sample_script_path),
+                    "--samples_dir", str(samples_dir),
+                    "--task", task,
+                    "--dataset", dataset,
+                    "--split", str(split),
+                    "--n_samples", str(n_samples),
+                    "--n_replicates", str(n_replicates),
+                    "--plinder_path", str(args.plinder_path),
+                    "--crossdocked_path", str(args.crossdocked_path),
+                    "--dataset_start_idx", str(dataset_start_idx),
+                    "--sys_idx_file", str(sys_idx_file),
+                    "--max_batch_size", str(max_batch_size),
+                    "--timeout", str(timeout),
+                ]
+
+                add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
+                add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
+                
+                commands.append(" ".join(cmd_parts))
+
     
     return commands
 
