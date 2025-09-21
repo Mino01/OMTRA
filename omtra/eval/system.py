@@ -738,6 +738,7 @@ class SampledSystem:
             mols = self.build_traj(ep_traj=endpoint, lig=True)['lig']
         elif ground_truth:
             mols = [self.get_gt_ligand(g=g)]
+            mols[0].SetProp("_Name", "ground_truth")
         else:
             mols = [self.get_rdkit_ligand()]
         write_mols_to_sdf(mols, str(output_file))
