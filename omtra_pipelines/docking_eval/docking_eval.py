@@ -43,6 +43,7 @@ def parse_args():
     group.add_argument("--ckpt_path", type=Path, default=None, help='Path to model checkpoint.')
     group.add_argument("--samples_dir", type=Path, default=None, help='Path to samples. Use existing samples, do not sample a model')
     
+    io.add_argument("--sample_only", action="store_true", help='Only sample the model. Do not compute metrics.')  
     io.add_argument("--output_dir", type=Path, default=None, help='Output directory.')
     io.add_argument("--sys_info_file", type=str, default=None, help="Path to the system info file (optional).")
 
@@ -50,7 +51,6 @@ def parse_args():
     sampling = p.add_argument_group("Sampling Options")
 
     sampling.add_argument("--task", type=str, help='Task to sample for (e.g. denovo_ligand).', required=True)
-
     sampling.add_argument("--n_samples", type=int, default=None, help='Number of samples to evaluate.')
     sampling.add_argument("--sys_idx_file", type=str, default=None, help='Path to a file with pre-selected system indices.')
     sampling.add_argument("--n_replicates", type=int, help="Number of replicates per input sample.", required=True)
@@ -959,28 +959,29 @@ def main(args):
                                               sample_start_idx=args.sample_start_idx,
                                               n_replicates=args.n_replicates)
     
-    metrics_to_run = {'pb_valid': not args.disable_pb_valid,
-                      'gnina': not args.disable_gnina,
-                      'posecheck': not args.disable_posecheck,
-                      'rmsd': not args.disable_rmsd and 'ligand_identity_condensed' not in task.groups_generated,
-                      'interaction_recovery': not args.disable_interaction_recovery,
-                      'pharm_match': (not args.disable_pharm_match) and ('pharmacophore' in task.groups_present),
-                      'ground_truth': not args.disable_ground_truth_metrics}
-    
-    metrics = compute_metrics(system_pairs=system_pairs,
-                              task=task,
-                              metrics_to_run=metrics_to_run,
-                              timeout=args.timeout)        
+    if not args.sample_only:
+        metrics_to_run = {'pb_valid': not args.disable_pb_valid,
+                        'gnina': not args.disable_gnina,
+                        'posecheck': not args.disable_posecheck,
+                        'rmsd': not args.disable_rmsd and 'ligand_identity_condensed' not in task.groups_generated,
+                        'interaction_recovery': not args.disable_interaction_recovery,
+                        'pharm_match': (not args.disable_pharm_match) and ('pharmacophore' in task.groups_present),
+                        'ground_truth': not args.disable_ground_truth_metrics}
+        
+        metrics = compute_metrics(system_pairs=system_pairs,
+                                task=task,
+                                metrics_to_run=metrics_to_run,
+                                timeout=args.timeout)        
 
-    metrics = metrics.reset_index()
+        metrics = metrics.reset_index()
 
-    if isinstance(sys_info, pd.DataFrame) and not sys_info.empty:
-        metrics = metrics.merge(sys_info, how='left', on='sys_id')  # Merge on 'sys_id'
+        if isinstance(sys_info, pd.DataFrame) and not sys_info.empty:
+            metrics = metrics.merge(sys_info, how='left', on='sys_id')  # Merge on 'sys_id'
 
-    if args.sample_start_idx is None:
-        metrics.to_csv(f"{output_dir}/eval_metrics.csv", index=False)
-    else:
-        metrics.to_csv(f"{output_dir}/eval_metrics_{args.sample_start_idx}.csv", index=False)
+        if args.sample_start_idx is None:
+            metrics.to_csv(f"{output_dir}/eval_metrics.csv", index=False)
+        else:
+            metrics.to_csv(f"{output_dir}/eval_metrics_{args.sample_start_idx}.csv", index=False)
 
 if __name__ == "__main__":
     args = parse_args()

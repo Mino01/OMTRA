@@ -23,6 +23,12 @@ def parse_args():
         help="Default number of samples if not specified in config"
     )
     parser.add_argument(
+        "--sample_only",
+        type=bool,
+        default=False,
+        help="Only sample the system. Do not compute metrics."
+    )
+    parser.add_argument(
         "--sys_idx_file",
         type=Path,
         default=None,
@@ -170,9 +176,15 @@ def load_config(config_file: Path) -> List[Dict[str, Any]]:
     return config
 
 def add_if_not_none(cmd_parts, flag, value):
-    """Helper: only add flag and value if not None."""
+    """ Only add flag and value if not None. """
     if value is not None:
         cmd_parts.extend([flag, str(value)])
+    return cmd_parts
+
+def add_flag(cmd_parts, flag, value):
+    """ Only add flag if not None."""
+    if value == True:
+        cmd_parts.append(flag)
     return cmd_parts
 
 def generate_commands(
@@ -192,6 +204,7 @@ def generate_commands(
         tasks = item['tasks']
         
         # Get optional parameters with defaults
+        sample_only =  item.get('sample_only', args.sample_only)
         n_samples = item.get('n_samples', args.default_n_samples)
         n_replicates = item.get('n_replicates', args.default_n_replicates)
         dataset = item.get('dataset', args.default_dataset)
@@ -204,7 +217,7 @@ def generate_commands(
         crossdocked_path = item.get('crossdocked_path', args.crossdocked_path)
 
         batch_size =  item.get('batch_size', args.batch_size)
-
+        
         if batch_size is not None:
             batches = [(start, min(batch_size, n_samples - start)) for start in range(0, n_samples, batch_size)]
 
@@ -233,6 +246,7 @@ def generate_commands(
                         "--timeout", str(timeout),
                     ]
 
+                    add_flag(cmd_parts, "--sample_only", sample_only)
                     add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
                     add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
                     add_if_not_none(cmd_parts, "--output_dir", eval_output_dir)
@@ -255,6 +269,7 @@ def generate_commands(
                             "--timeout", str(timeout),
                         ]
 
+                        add_flag(cmd_parts, "--sample_only", sample_only)
                         add_if_not_none(cmd_parts, "--dataset_start_idx", dataset_start_idx)
                         add_if_not_none(cmd_parts, "--sys_idx_file", sys_idx_file)
                         add_if_not_none(cmd_parts, "--output_dir", eval_output_dir)

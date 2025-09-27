@@ -922,6 +922,7 @@ class OMTRA(pl.LightningModule):
         for start_idx in range(0, n_samples, chunk_size):
             end_idx = min(start_idx + chunk_size, n_samples)
             g_chunk = g_list[start_idx:end_idx]
+            coms_chunk = coms[start_idx:end_idx]
             n_chunk = len(g_chunk)
 
             # Determine reps per batch for this chunk
@@ -937,7 +938,7 @@ class OMTRA(pl.LightningModule):
                                             device=device,
                                             n_timesteps=n_timesteps,
                                             visualize=visualize,
-                                            coms=coms,
+                                            coms=coms_chunk,
                                             extract_latents_for_confidence=extract_latents_for_confidence,
                                             time_spacing=time_spacing,
                                             stochastic_sampling=stochastic_sampling,
@@ -960,7 +961,7 @@ class OMTRA(pl.LightningModule):
                                             device=device,
                                             n_timesteps=n_timesteps,
                                             visualize=visualize,
-                                            coms=coms,
+                                            coms=coms_chunk,
                                             extract_latents_for_confidence=extract_latents_for_confidence,
                                             time_spacing=time_spacing,
                                             stochastic_sampling=stochastic_sampling,
