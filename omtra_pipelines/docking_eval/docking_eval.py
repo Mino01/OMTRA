@@ -62,6 +62,7 @@ def parse_args():
     sampling.add_argument("--n_lig_atom_margin", type=float, default=0.075, help="Margin for number of ligand atoms for de novo design if using number of ground truth ligand atoms.")
 
     sampling.add_argument("--max_batch_size", type=int, default=500, help='Maximum number of systems to sample per batch.')
+    sampling.add_argument("--bs_per_gbmem", type=float, default=None, help='Batch size per GB/EM on the GPU.')
     sampling.add_argument("--dataset", type=str, default="plinder", help='Dataset.')
     sampling.add_argument("--split", type=str, default="test", help='Data split (i.e., train, val).')
     sampling.add_argument("--dataset_start_idx", type=int, default=0, help="Index in the dataset to start sampling from.")
@@ -80,7 +81,8 @@ def parse_args():
     metrics.add_argument("--disable_interaction_recovery", action="store_true", help='Disables analysis of interaction recovery by generated ligands.')
     metrics.add_argument("--disable_pharm_match", action="store_true", help='Disables computations of matching pharmacophores by generated ligands.')
     metrics.add_argument("--disable_ground_truth_metrics", action="store_true", help='Disables all relevant metrics on the truth ligand.')
-    
+    metrics.add_argument('--disable_strain', action='store_true', help='Disables strain energy calculation.')
+
     return p.parse_args()
 
 
@@ -185,7 +187,7 @@ def gnina(lig_file, prot_file, env):
     return results
 
 
-def posecheck(ligs, prot_file, true_lig=None, true_prot_file=None, interaction_recovery=False):
+def posecheck(ligs, prot_file, true_lig=None, true_prot_file=None, interaction_recovery=False, disable_strain=False):
     
     # initialize the PoseCheck object
     pc = PoseCheck()
@@ -201,7 +203,8 @@ def posecheck(ligs, prot_file, true_lig=None, true_prot_file=None, interaction_r
     pc.load_ligands_from_mols(ligs)
 
     results['clashes'] = pc.calculate_clashes()
-    results['strain'] = pc.calculate_strain_energy()
+    if not disable_strain:
+        results['strain'] = pc.calculate_strain_energy()
 
     interactions = pc.calculate_interactions()
 
@@ -321,7 +324,9 @@ def repair_and_sanitize(lig, i):
 def compute_metrics(system_pairs: List[SampledSystem], 
                     task: Task, 
                     metrics_to_run: Dict[str, bool], 
-                    timeout: int):
+                    timeout: int,
+                    disable_strain: bool = False,
+                    ):
     
     env = os.environ.copy()
     env['LD_LIBRARY_PATH'] = "/net/galaxy/home/koes/dkoes/local/miniconda/envs/cuda/lib/"
@@ -427,7 +432,8 @@ def compute_metrics(system_pairs: List[SampledSystem],
                                                 prot_file=data['gen_prot_file'],
                                                 true_lig=true_lig,
                                                 true_prot_file=data['true_prot_file'],
-                                                interaction_recovery=metrics_to_run['interaction_recovery'])
+                                                interaction_recovery=metrics_to_run['interaction_recovery'],
+                                                disable_strain=disable_strain)
                 
                 if posechk_results is not None:
                     posechk_results = pd.DataFrame(posechk_results, index=valid_lig_indices)
@@ -435,12 +441,14 @@ def compute_metrics(system_pairs: List[SampledSystem],
                 else:
                     for i, gen_lig in enumerate(valid_gen_ligs):
                         posechk_result_single = run_with_timeout(posecheck, 
-                                                                timeout=120,
-                                                                ligs=[gen_lig],
-                                                                prot_file=data['gen_prot_file'],
-                                                                true_lig=true_lig,
-                                                                true_prot_file=data['true_prot_file'],
-                                                                interaction_recovery=metrics_to_run['interaction_recovery'])
+                                                            timeout=120,
+                                                            ligs=[gen_lig],
+                                                            prot_file=data['gen_prot_file'],
+                                                            true_lig=true_lig,
+                                                            true_prot_file=data['true_prot_file'],
+                                                            interaction_recovery=metrics_to_run['interaction_recovery'],
+                                                            disable_strain=disable_strain
+                                                                )
 
                         if posechk_result_single is not None:
                             metrics.loc[(sys_id, data['gen_prot_id'], valid_gen_lig_ids[i]), list(posechk_result_single.keys())] = pd.Series({k: v[0] for k, v in posechk_result_single.items()})
@@ -452,7 +460,8 @@ def compute_metrics(system_pairs: List[SampledSystem],
                     posechk_true_results = run_with_timeout(posecheck,
                                                             timeout=120,
                                                             ligs=[true_lig],
-                                                            prot_file=data['true_prot_file'],)
+                                                            prot_file=data['true_prot_file'],
+                                                            disable_strain=disable_strain)
                     
                     if posechk_true_results is not None:
                         flat_row = {k: v[0] for k, v in posechk_true_results.items()}
@@ -904,6 +913,14 @@ def main(args):
                   'noise_scaler': args.noise_scaler,
                   'eps': args.eps,
                   'n_lig_atom_margin': args.n_lig_atom_margin}
+        
+        if args.bs_per_gbmem is not None:
+            gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  # in GB
+            max_batch_size = int(gpu_mem_available * args.bs_per_gbmem)
+            max_batch_size = max(1, max_batch_size)  # ensure at least batch size of 1
+            print(f"Setting max_batch_size to {max_batch_size} based on available GPU memory.")
+        else:
+            max_batch_size = args.max_batch_size
 
         # Get samples from checkpoint
         g_list, sampled_systems, sys_info = sample_system(ckpt_path=args.ckpt_path,
@@ -915,7 +932,7 @@ def main(args):
                                                           n_timesteps=args.n_timesteps,
                                                           dataset=args.dataset,
                                                           split=args.split,
-                                                          max_batch_size=args.max_batch_size,
+                                                          max_batch_size=max_batch_size,
                                                           dataset_name=args.dataset,
                                                           plinder_path=args.plinder_path,
                                                           crossdocked_path=args.crossdocked_path,
@@ -971,7 +988,9 @@ def main(args):
         metrics = compute_metrics(system_pairs=system_pairs,
                                 task=task,
                                 metrics_to_run=metrics_to_run,
-                                timeout=args.timeout)        
+                                timeout=args.timeout,
+                                disable_strain=args.disable_strain
+                                )
 
         metrics = metrics.reset_index()
 
