@@ -10,6 +10,7 @@ from omtra.constants import (
     lig_atom_type_map,
     charge_map,
     ph_idx_to_type,
+    ph_idx_to_elem,
     residue_map,
     protein_element_map,
     protein_atom_map,
@@ -38,11 +39,15 @@ def load_protein_biotite(protein_file: Path) -> StructureData:
     else:
         raise ValueError(f"Unsupported protein format: {suffix}")
 
+    import biotite.structure as struc
+    # removing waters and hydrogens
+    st = st[st.res_name != "HOH"]
+    st = st[st.element != "H"]
+    st = st[st.element != "D"]
+
     coords = st.coord
     if coords.size == 0:
         raise ValueError("Protein structure has no atoms")
-
-    import biotite.structure as struc
     backbone_mask = struc.filter_peptide_backbone(st)
     backbone = BackboneData(
         coords=coords[backbone_mask],
@@ -138,10 +143,16 @@ def load_pharmacophore_xyz(pharm_file: Path):
     coords = np.asarray(coords, dtype=np.float32)
     kinds = np.asarray(kinds)
     
+    # Convert type names to element symbols if needed
+    # ph_idx_to_type maps to ph_idx_to_elem at same index
+    type_to_elem = {ptype: elem for ptype, elem in zip(ph_idx_to_type, ph_idx_to_elem)}
+    
     unique_kinds, inverse = np.unique(kinds, return_inverse=True)
     unk_code = ph_idx_to_type.index('UNK') if 'UNK' in ph_idx_to_type else 0
     unique_codes = np.array([
-        ph_idx_to_type.index(kind) if kind in ph_idx_to_type else unk_code
+        ph_idx_to_elem.index(kind) if kind in ph_idx_to_elem else (
+            ph_idx_to_elem.index(type_to_elem[kind]) if kind in type_to_elem else unk_code
+        )
         for kind in unique_kinds
     ], dtype=np.int64)
     kind_idx = unique_codes[inverse]
@@ -157,42 +168,7 @@ def create_conditional_graphs_from_files(
     protein_file: Optional[Path] = None,
     ligand_file: Optional[Path] = None,
     pharmacophore_file: Optional[Path] = None,
-    input_files_dir: Optional[Path] = None,
 ):
-    # resolve files from directory if provided
-    if input_files_dir is not None:
-        if protein_file is None:
-            pdb_files = list(input_files_dir.glob("*.pdb"))
-            cif_files = list(input_files_dir.glob("*.cif"))
-            if pdb_files:
-                protein_file = pdb_files[0]
-            elif cif_files:
-                protein_file = cif_files[0]
-            else:
-                protein_file = None
-                
-        if ligand_file is None:
-            sdf_files = list(input_files_dir.glob("*.sdf"))
-            if sdf_files:
-                ligand_file = sdf_files[0]  
-            else:
-                ligand_file = None
-                
-        if pharmacophore_file is None:
-            xyz_files = list(input_files_dir.glob("*.xyz"))
-            if xyz_files:
-                pharmacophore_file = xyz_files[0] 
-            else:
-                pharmacophore_file = None
-
-    required = set(task.groups_fixed)
-    if 'protein_identity' in required and protein_file is None:
-        raise ValueError("Task requires protein_file")
-    if 'ligand_identity' in required and ligand_file is None and 'ligand_identity_condensed' in required and ligand_file is None:
-        raise ValueError("Task requires ligand_file")
-    if 'pharmacophore' in required and pharmacophore_file is None:
-        raise ValueError("Task requires pharmacophore_file")
-
     receptor = load_protein_biotite(protein_file) if protein_file is not None else None
     
     needs_condensed = 'ligand_identity_condensed' in task.groups_present

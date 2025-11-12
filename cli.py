@@ -1,6 +1,8 @@
 import argparse
 import sys
 from pathlib import Path
+import omtra.tasks
+from omtra.tasks.register import TASK_REGISTER
 
 def create_parser():
     """Create the argument parser for sampling."""
@@ -8,6 +10,8 @@ def create_parser():
         prog='omtra',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    
+    available_tasks = sorted([name for name in TASK_REGISTER.keys() if "_condensed" in name])
     
     # sampling args
     parser.add_argument(
@@ -18,7 +22,8 @@ def create_parser():
     parser.add_argument(
         "--task",
         type=str,
-        help="Task to sample for (e.g. denovo_ligand)",
+        choices=available_tasks,
+        help=f"Task to sample for.",
         required=True
     )
     parser.add_argument(
@@ -31,14 +36,20 @@ def create_parser():
         "--n_samples",
         type=int,
         default=100,
-        help="Number of samples to draw"
+        help=(
+            "Number of samples to draw. "
+            "When using input files (--protein_file, etc.), this is the number of samples generated from that single input. "
+            "When using datasets, this is the number of systems to sample from the dataset."
+        )
     )
     parser.add_argument(
         "--n_replicates",
         type=int,
         default=1,
         help=(
-            "For conditional sampling: number of replicates per input sample"
+            "Number of replicates per system. "
+            "When using input files (--protein_file, etc.), this is ignored (set --n_samples instead). "
+            "When using datasets, this is the number of replicates per sampled system from the dataset."
         )
     )
     parser.add_argument(
@@ -120,55 +131,90 @@ def create_parser():
         "--pharmacophore_file",
         type=Path, 
         default=None,
-        help="Path to pharmacophore file (XYZ or json) for pharmacophore-conditioned tasks"
-    )
-    parser.add_argument(
-        "--input_files_dir",
-        type=Path,
-        default=None,
-        help="Directory containing input files (any .pdb/.cif for protein, .sdf for ligand, .xyz for pharmacophore)"
+        help="Path to pharmacophore file (XYZ format) for pharmacophore-conditioned tasks"
     )
     return parser
+
+
+def _check_available_files(args):
+    """Check what input files are available."""
+    has_protein = args.protein_file is not None
+    has_ligand = args.ligand_file is not None
+    has_pharmacophore = args.pharmacophore_file is not None
+    
+    return has_protein, has_ligand, has_pharmacophore
+
+
+def _validate_task_inputs(args, task, has_protein, has_ligand, has_pharmacophore):
+    """Validate that required inputs for the task are provided."""
+    required = set(task.groups_fixed)
+    missing = []
+    
+    # Map groups_fixed to file types
+    if 'protein_identity' in required and not has_protein:
+        missing.append("protein file (--protein_file)")
+    if 'ligand_identity' in required and not has_ligand:
+        missing.append("ligand file (--ligand_file)")
+    if 'ligand_identity_condensed' in required and not has_ligand:
+        missing.append("ligand file (--ligand_file)")
+    if 'pharmacophore' in required and not has_pharmacophore:
+        missing.append("pharmacophore file (--pharmacophore_file)")
+    
+    has_dataset_path = args.pharmit_path is not None or args.plinder_path is not None
+    
+    if missing:
+        if has_dataset_path:
+            # Warn but continue using dataset
+            print(f"Warning: Task '{args.task}' requires the following inputs that were not provided:")
+            for item in missing:
+                print(f"  - {item}")
+            print("Using dataset path to sample from instead.")
+        else:
+            print(f"Error: Task '{args.task}' requires the following inputs that were not provided:")
+            for item in missing:
+                print(f"  - {item}")
+            print("\nEither provide the required input files or specify a dataset path (--pharmit_path or --plinder_path).")
+            sys.exit(1)
+    
+    if 'protein_identity' in task.groups_fixed and not has_ligand:
+        print("Warning: Protein-conditioned task detected but no reference ligand provided.")
+        print("The system will use the protein center of mass instead of the reference ligand center of mass.")
+        print("Consider providing a reference ligand file (--ligand_file) for better results.")
 
 
 def run_sample(args):
     from routines.sample import main as sample_main
     import torch
+    from omtra.tasks.register import task_name_to_class
     
-    if args.protein_file or args.ligand_file or args.pharmacophore_file or args.input_files_dir:
-        from omtra.tasks.register import task_name_to_class
+    task = task_name_to_class(args.task)
+    
+    has_protein, has_ligand, has_pharmacophore = _check_available_files(args)
+    
+    # Validate inputs
+    if not task.unconditional:
+        _validate_task_inputs(args, task, has_protein, has_ligand, has_pharmacophore)
+    
+    # create graphs from files
+    if args.protein_file or args.ligand_file or args.pharmacophore_file:
         from omtra.utils.file_to_graph import create_conditional_graphs_from_files
         
         device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-        
-        task = task_name_to_class(args.task)
         
         g_list = create_conditional_graphs_from_files(
             protein_file=args.protein_file,
             ligand_file=args.ligand_file, 
             pharmacophore_file=args.pharmacophore_file,
-            input_files_dir=args.input_files_dir,
             task=task,
-            n_samples=1,  # 1 graph per input file
+            n_samples=1,  # 1 graph from the input file
             device=device
         )
         
+        # When using input files: 1 system, n_samples is the number of replicates
         args.n_replicates = args.n_samples
         args.n_samples = 1
         
         args.g_list_from_files = g_list
-    else:
-        # check if task requires conditioning
-        from omtra.tasks.register import task_name_to_class
-        task = task_name_to_class(args.task)
-        
-        if not task.unconditional and not (args.protein_file or args.ligand_file or args.pharmacophore_file or args.input_files_dir):
-            if not args.pharmit_path and not args.plinder_path:
-                print(f"Error: Task '{args.task}' is conditional but no input files provided and no dataset path specified.")
-                print("Either provide input files (--protein_file, --ligand_file, --pharmacophore_file) or dataset path (--pharmit_path, --plinder_path).")
-                sys.exit(1)
-            else:
-                print(f"Warning: Task '{args.task}' is conditional task but no input files provided. Using dataset path to sample from.")
     
     if hasattr(args, 'checkpoint') and args.checkpoint:
         from pathlib import Path
