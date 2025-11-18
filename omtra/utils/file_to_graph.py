@@ -22,12 +22,11 @@ from omtra.data.condensed_atom_typing import CondensedAtomTyper
 from omtra.utils.embedding import residue_sinusoidal_encoding
 
 
-
 # loaders
 def load_protein_biotite(protein_file: Path) -> StructureData:
     try:
         from biotite.structure.io import pdb
-        from biotite.structure.io.pdbx import CIFFile
+        from biotite.structure.io.pdbx import CIFFile, get_structure
     except ImportError as e:
         raise ImportError("biotite is required: pip install biotite") from e
 
@@ -35,7 +34,8 @@ def load_protein_biotite(protein_file: Path) -> StructureData:
     if suffix == ".pdb":
         st = pdb.PDBFile.read(str(protein_file)).get_structure(model=1)
     elif suffix == ".cif":
-        st = CIFFile.read(str(protein_file)).get_structure(model=1)
+        cif_file = CIFFile.read(str(protein_file))
+        st = get_structure(cif_file, model=1, include_bonds=False)
     else:
         raise ValueError(f"Unsupported protein format: {suffix}")
 
@@ -160,6 +160,119 @@ def load_pharmacophore_xyz(pharm_file: Path):
     return coords, kind_idx
 
 
+def extract_backbone_data(backbone_atoms) -> BackboneData:
+    """Extract backbone data from backbone atoms (N, CA, C per residue)."""
+    import biotite.structure as struc
+    
+    compound_keys = np.array(
+        [f"{chain}_{res}" for chain, res in zip(backbone_atoms.chain_id, backbone_atoms.res_id)]
+    )
+
+    unique_compound_keys = np.unique(compound_keys)
+    num_residues = len(unique_compound_keys)
+
+    coords = np.zeros((num_residues, 3, 3))
+    res_ids = np.zeros(num_residues, dtype=int)
+    res_names_list = []
+    chain_ids_list = []
+
+    for i, compound_key in enumerate(unique_compound_keys):
+        chain_id, res_id = compound_key.split("_")
+        res_id = int(res_id)
+
+        res_mask = (backbone_atoms.chain_id == chain_id) & (backbone_atoms.res_id == res_id)
+        res_atoms = backbone_atoms[res_mask]
+
+        res_ids[i] = res_id
+        res_names_list.append(res_atoms.res_name[0])
+        chain_ids_list.append(chain_id)
+
+        for j, atom_name in enumerate(["N", "CA", "C"]):
+            atom_mask = res_atoms.atom_name == atom_name
+            if np.any(atom_mask):
+                coords[i, j] = res_atoms.coord[atom_mask][0]
+            else:
+                # if atom is missing
+                coords[i, j] = np.zeros(3)
+
+    res_names = np.array(res_names_list)
+    chain_ids = np.array(chain_ids_list)
+
+    return BackboneData(
+        coords=coords,
+        res_ids=res_ids,
+        res_names=res_names,
+        chain_ids=chain_ids,
+    )
+
+
+def extract_pocket(
+    receptor: StructureData,
+    reference_coords: np.ndarray,
+    pocket_cutoff: float = 8.0,
+) -> Optional[StructureData]:
+    try:
+        import biotite.structure as struc
+    except ImportError as e:
+        raise ImportError("biotite is required: pip install biotite") from e
+    
+    atom_array = receptor.to_atom_array()
+    
+    atom_array = atom_array[atom_array.res_name != "HOH"]
+    atom_array = atom_array[atom_array.element != "H"]
+    atom_array = atom_array[atom_array.element != "D"]
+    
+    if len(atom_array) == 0:
+        return None
+    
+    receptor_cell_list = struc.CellList(atom_array, cell_size=pocket_cutoff)
+    
+    close_atom_indices = []
+    for ref_coord in reference_coords:
+        indices = receptor_cell_list.get_atoms(ref_coord, radius=pocket_cutoff)
+        close_atom_indices.extend(indices)
+    
+    if len(close_atom_indices) == 0:
+        return None
+    
+    close_res_ids = atom_array.res_id[close_atom_indices]
+    close_chain_ids = atom_array.chain_id[close_atom_indices]
+    unique_res_pairs = set(zip(close_res_ids, close_chain_ids))
+    
+    pocket_indices = []
+    for res_id, chain_id in unique_res_pairs:
+        res_mask = (atom_array.res_id == res_id) & (atom_array.chain_id == chain_id)
+        res_indices = np.where(res_mask)[0]
+        pocket_indices.extend(res_indices)
+    
+    if len(pocket_indices) == 0:
+        return None
+    
+    pocket_atoms = atom_array[pocket_indices]
+    
+    backbone_atoms = pocket_atoms[struc.filter_peptide_backbone(pocket_atoms)]
+    if len(backbone_atoms) == 0:
+        return None
+    
+    backbone_data = extract_backbone_data(backbone_atoms)
+    if backbone_data is None:
+        return None
+    
+    bb_mask = struc.filter_peptide_backbone(pocket_atoms)
+    
+    return StructureData(
+        coords=pocket_atoms.coord,
+        atom_names=pocket_atoms.atom_name,
+        elements=pocket_atoms.element,
+        res_ids=pocket_atoms.res_id,
+        res_names=pocket_atoms.res_name,
+        chain_ids=pocket_atoms.chain_id,
+        backbone_mask=bb_mask,
+        backbone=backbone_data,
+        cif=None,
+    )
+
+
 # graph construction
 def create_conditional_graphs_from_files(
     task: Task,
@@ -168,12 +281,32 @@ def create_conditional_graphs_from_files(
     protein_file: Optional[Path] = None,
     ligand_file: Optional[Path] = None,
     pharmacophore_file: Optional[Path] = None,
+    pocket_cutoff: Optional[float] = 8.0,
+    use_pocket: bool = True,
 ):
     receptor = load_protein_biotite(protein_file) if protein_file is not None else None
     
     needs_condensed = 'ligand_identity_condensed' in task.groups_present
     ligand = load_ligand_rdkit(ligand_file, compute_condensed=needs_condensed) if ligand_file is not None else None
     pharm_coords, pharm_types = (load_pharmacophore_xyz(pharmacophore_file) if pharmacophore_file is not None else (None, None))
+    
+    if use_pocket and receptor is not None and pocket_cutoff is not None:
+        reference_coords = None
+        
+        if ligand is not None:
+            lig_coords = ligand.coords
+            if isinstance(lig_coords, torch.Tensor):
+                reference_coords = lig_coords.cpu().numpy()
+            else:
+                reference_coords = np.asarray(lig_coords)
+        elif pharm_coords is not None:
+            reference_coords = pharm_coords
+        else:
+            reference_coords = np.mean(receptor.coords, axis=0, keepdims=True)
+        
+        pocket = extract_pocket(receptor, reference_coords, pocket_cutoff=pocket_cutoff)
+        if pocket is not None:
+            receptor = pocket
 
     graphs = []
     for _ in range(n_samples):
@@ -225,8 +358,10 @@ def create_conditional_graphs_from_files(
             a_idx = unique_codes[inverse]
             
             unique_elems, inverse = np.unique(receptor.elements.astype(str), return_inverse=True)
+            unknown_elem_code = protein_element_map.index('X')
             unique_codes = np.array([
-                protein_element_map.index(elem) for elem in unique_elems
+                protein_element_map.index(elem) if elem in protein_element_map else unknown_elem_code
+                for elem in unique_elems
             ], dtype=np.int64)
             e_idx = unique_codes[inverse]
             
