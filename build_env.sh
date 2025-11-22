@@ -9,10 +9,13 @@ if [[ "$CONDA_DEFAULT_ENV" == "base" ]] || [[ -z "$VIRTUAL_ENV" && -z "$CONDA_PR
     sleep 5
 fi
 
+echo "Installing uv package manager..."
+pip install uv
+
 echo "Installing CUDA-enabled dependencies..."
-pip install -r requirements-cuda.txt
+uv pip install -r requirements-cuda.txt
 
 echo "Installing OMTRA and remaining dependencies..."
-pip install -e .
+uv pip install -e .
 
 echo "✔ Installation complete!"
