@@ -1,7 +1,6 @@
 import dgl
 import torch
 import numpy as np
-from omegaconf import DictConfig
 import math
 
 from rdkit import Chem
@@ -9,18 +8,18 @@ from rdkit.Geometry import Point3D
 
 from omtra.dataset.zarr_dataset import ZarrDataset
 from omtra.utils.misc import classproperty
-from omtra.constants import lig_atom_type_map, charge_map, bond_type_map, ph_idx_to_type
+from omtra.constants import lig_atom_type_map, bond_type_map
 
 
 class PharmitDataset(ZarrDataset):
     def __init__(self, 
-                 processed_data_dir: str,
+                 data_dir: str,
                  split: str,
                  return_type: str,
                  include_pharmacophore: bool = False,
                  include_extra_feats: bool = False,
     ):
-        super().__init__(split, processed_data_dir)
+        super().__init__(split, data_dir)
 
         if return_type not in ['rdkit', 'dict']:
             return NotImplementedError("Returned molecule type must be 'rdkit' or 'dict'")
