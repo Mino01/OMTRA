@@ -1,32 +1,51 @@
 import dgl
 import torch
+from torch.utils.data import Dataset
 import numpy as np
-import math
+from pathlib import Path
+import functools
+import zarr
+from collections import OrderedDict
 
 from rdkit import Chem
 from rdkit.Geometry import Point3D
 
-from omtra.dataset.zarr_dataset import ZarrDataset
+from omtra.utils.zarr_utils import list_zarr_arrays
 from omtra.utils.misc import classproperty
 from omtra.constants import lig_atom_type_map, bond_type_map
 
 
-class PharmitDataset(ZarrDataset):
+class PharmitDataset(Dataset):
     def __init__(self, 
                  data_dir: str,
                  split: str,
                  return_type: str,
                  include_pharmacophore: bool = False,
                  include_extra_feats: bool = False,
+                 n_chunks_cache: int = 4,
     ):
-        super().__init__(split, data_dir)
+        super().__init__()
+
+        zarr_store_path = Path(data_dir) / f'{split}.zarr'
+        if not zarr_store_path.exists():
+            raise ValueError(f"There is no zarr store at the path {zarr_store_path}")
 
         if return_type not in ['rdkit', 'dict']:
             return NotImplementedError("Returned molecule type must be 'rdkit' or 'dict'")
-        
+
+        self.store_path = zarr_store_path   
+        self.store = zarr.storage.LocalStore(str(zarr_store_path), read_only=True)
+        self.root = zarr.open(store=self.store, mode='r')
+        self.n_chunks_cache = n_chunks_cache
+        self.build_cached_chunk_fetchers()
+
+        self.rows_per_chunk = {}
+        for array_name in self.array_keys:
+            self.rows_per_chunk[array_name] = self.root[array_name].chunks[0]
+
         self.return_type = return_type
         self.include_pharmacophore = include_pharmacophore
-        self.include_extra_feats = include_extra_feats
+        self.include_extra_feats = include_extra_feats   
 
     @classproperty
     def name(cls):
@@ -40,9 +59,55 @@ class PharmitDataset(ZarrDataset):
     def graphs_per_chunk(self):
         return len(self) // self.n_zarr_chunks
 
+    @functools.cached_property
+    def array_keys(self):
+        return list_zarr_arrays(self.root)
+        
+    def build_cached_chunk_fetchers(self):
+        self.chunk_fetchers = {}
+        for array_name in self.array_keys:
+            self.chunk_fetchers[array_name] = ChunkFetcher(self.root, array_name, cache_size=self.n_chunks_cache)
 
     def __len__(self):
         return self.root['lig/node/graph_lookup'].shape[0]
+
+    def slice_array(self, array_name, start_idx, end_idx=None):
+        """Slice data from a zarr array but utilize chunk caching to minimize disk access."""
+
+        if array_name not in self.array_keys:
+            raise ValueError(f"There is no array with the name {array_name} in the zarr store located at {self.store_path}")
+
+        single_idx = False
+        if end_idx is None:
+            single_idx = True
+            end_idx = start_idx+1
+
+        chunk_size = self.rows_per_chunk[array_name] # the number of rows in each chunk (we only chunk and slice along the first dimension)
+
+        # get the chunk id, as well as the index of our slice relative to the chunk, for the start and end of the slice
+        start_chunk_id, start_chunk_idx = divmod(start_idx, chunk_size)
+        end_chunk_id, end_chunk_idx = divmod(end_idx, chunk_size)
+
+        # retrieve all chunks that are "touched" by the slice, using the cached chunk fetchers
+        chunks = [self.chunk_fetchers[array_name](chunk_id) for chunk_id in range(start_chunk_id, end_chunk_id + 1)]
+
+        # slice just the data we want from the chunks
+        if len(chunks) == 1:
+            chunk_slices = [  chunks[0][start_chunk_idx:end_chunk_idx]  ]
+        else:
+            chunk_slices = []
+            for i in range(len(chunks)):
+                if i == 0:
+                    chunk_slices = [chunks[i][start_chunk_idx:]]
+                elif i == len(chunks) - 1:
+                    chunk_slices.append(chunks[i][:end_chunk_idx])
+                else:
+                    chunk_slices.append(chunks[i])
+
+        data = np.concatenate(chunk_slices)
+        if single_idx:
+            data = data.squeeze()
+        return data
 
     def __getitem__(self, idx) -> dgl.DGLHeteroGraph:
 
@@ -55,7 +120,7 @@ class PharmitDataset(ZarrDataset):
         for nfeat in ['x', 'a', 'c']:
             data_dict[nfeat] = self.slice_array(f'lig/node/{nfeat}', start_idx, end_idx)
 
-        if self.include_extra_feats:
+        if self.include_extra_feats and self.return_type == 'dict':
             # Get extra ligand atom features as a dictionary
             data_dict['extra_feats'] = {}
 
@@ -83,8 +148,6 @@ class PharmitDataset(ZarrDataset):
         data_dict['e'] = self.slice_array('lig/edge/e', start_idx, end_idx)
         data_dict['edge_idxs'] = self.slice_array('lig/edge/edge_index', start_idx, end_idx)
 
-        # TODO: add chiral edge types
-
         # convert to torch tensors and set data types
         for k, v in data_dict.items():
             if isinstance(v, np.ndarray):
@@ -93,7 +156,6 @@ class PharmitDataset(ZarrDataset):
                     data_dict[k] = data_dict[k].float()
                 else:
                     data_dict[k] = data_dict[k].long()
-        
 
         if self.return_type == 'rdkit':
             # Convert from integer encoding to true atom types and charges
@@ -109,7 +171,7 @@ class PharmitDataset(ZarrDataset):
                 start_idx, end_idx = self.slice_array('pharm/node/graph_lookup', idx)
                 data_dict['pharm'] = {}
                 data_dict['pharm']['x'] = torch.from_numpy(self.slice_array('pharm/node/x', start_idx, end_idx)).float()
-                #data_dict['pharm']['v'] = torch.from_numpy(self.slice_array('pharm/node/v', start_idx, end_idx)).long()
+                data_dict['pharm']['v'] = torch.from_numpy(self.slice_array('pharm/node/v', start_idx, end_idx)).long()
                 data_dict['pharm']['a'] = torch.from_numpy(self.slice_array('pharm/node/a', start_idx, end_idx)).long()
 
             mol = data_dict
@@ -123,54 +185,6 @@ class PharmitDataset(ZarrDataset):
     def retrieve_edge_idxs(self, idx) -> tuple:
         start_idx, end_idx = self.slice_array('lig/edge/graph_lookup', idx)
         return start_idx, end_idx
-
-    def retrieve_graph_chunks(self, frac_start: float, frac_end: float):
-        """
-        This dataset contains len(self) examples. We divide all samples (or, graphs) into separate chunk. 
-        We call these "graph chunks"; this is not the same thing as chunks defined in zarr arrays.
-        I know we need better terminology; but they're chunks! they're totally chunks. just a different kind of chunk.
-        """
-        n_graphs = len(self)
-        n_even_chunks, n_graphs_in_last_chunk = divmod(n_graphs, self.graphs_per_chunk)
-
-        n_chunks = n_even_chunks + int(n_graphs_in_last_chunk > 0)
-
-        # construct a tensor containing the index ranges for each chunk
-        chunk_index = torch.zeros(n_chunks, 2, dtype=torch.int64)
-        chunk_index[:, 0] = self.graphs_per_chunk*torch.arange(n_chunks)
-        chunk_index[:-1, 1] = chunk_index[1:, 0]
-        chunk_index[-1, 1] = n_graphs
-
-        # if we need to only expose a subset of chunks (due to distributed training), do so here
-        if not (frac_start == 0.0 and frac_end == 1.0):
-            start_chunk_idx = math.floor(frac_start * n_chunks)
-            end_chunk_idx = math.floor(frac_end * n_chunks)
-            chunk_index = chunk_index[start_chunk_idx:end_chunk_idx]
-
-        return chunk_index
-    
-    def get_num_nodes(self, start_idx, end_idx, per_ntype=False):
-        # TODO: I don't know if we want this anymore
-        # here, unlike in other places, start_idx and end_idx are 
-        # indexes into the graph_lookup array, not a node/edge data array
-
-        node_types = ['lig']
-        if self.include_pharmacophore:
-            node_types.append('pharm')
-
-        node_counts = []
-        for ntype in node_types:
-            graph_lookup = self.slice_array(f'{ntype}/node/graph_lookup', start_idx, end_idx)
-            ntype_node_counts = graph_lookup[:, 1] - graph_lookup[:, 0]
-            node_counts.append(ntype_node_counts)
-
-        if per_ntype:
-            num_nodes_dict = {ntype: ncount for ntype, ncount in zip(node_types, node_counts)}
-            return num_nodes_dict
-
-        node_counts = np.stack(node_counts, axis=0).sum(axis=0)
-        node_counts = torch.from_numpy(node_counts)
-        return node_counts
 
     def build_rdkit_mol(self, data_dict):
         """Builds a rdkit molecule from the given atom and bond information."""
@@ -198,13 +212,6 @@ class PharmitDataset(ZarrDataset):
             dst_idx = int(dst_idx)
             mol.AddBond(src_idx, dst_idx, bond_type_map[bond_type])
 
-        # add extra features as atom properties
-        if self.include_extra_feats:
-            for a in mol.GetAtoms():
-                for k, v in data_dict['extra_feats'].items():
-                    feat = v[a.GetIdx()]
-                    a.SetProp(k, str(feat))
-
         try:
             mol = mol.GetMol()
         except Chem.KekulizeException:
@@ -220,3 +227,28 @@ class PharmitDataset(ZarrDataset):
         mol.AddConformer(conf)
 
         return mol
+
+class ChunkFetcher:
+    def __init__(self, root, array_name, cache_size):
+        self.root = root
+        self.array_name = array_name
+        self.array = self.root[self.array_name]
+        self.cache_size = cache_size
+        self.cache = OrderedDict()  # Ordered dictionary to maintain LRU order
+        self.chunk_size = self.array.chunks[0]
+
+    def __call__(self, chunk_id):
+        if chunk_id in self.cache:
+            # Move the accessed chunk to the end to mark it as recently used
+            self.cache.move_to_end(chunk_id)
+        else:
+            if len(self.cache) >= self.cache_size:
+                # Remove the least recently used chunk
+                self.cache.popitem(last=False)
+
+            # Fetch the chunk and add it to the cache
+            chunk_start_idx = chunk_id * self.chunk_size
+            chunk_end_idx = chunk_start_idx + self.chunk_size
+            self.cache[chunk_id] = self.array[chunk_start_idx:chunk_end_idx]
+
+        return self.cache[chunk_id]
