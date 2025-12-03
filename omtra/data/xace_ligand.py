@@ -39,6 +39,11 @@ class MolXACE:
     tcv_counts: Optional[dict] = None
     failure_mode: Optional[str] = None
 
+    def to_torch(self):
+        self.a = torch.from_numpy(self.a).long()
+        self.c = torch.from_numpy(self.c).long()
+        self.e = torch.from_numpy(self.e).long()
+        self.edge_idxs = torch.from_numpy(self.edge_idxs).long()
 
     def sparse_to_dense(self):
         """Converts the sparse representation of the molecule to a dense representation."""
@@ -51,11 +56,8 @@ class MolXACE:
         else:
             n_atoms = self.a.shape[0]
             
-        e_tensor = self.e
-        edge_idxs_tensor = self.edge_idxs
-        
-        adj = torch.zeros((n_atoms, n_atoms), dtype=e_tensor.dtype)
-        adj[edge_idxs_tensor[:, 0], edge_idxs_tensor[:, 1]] = e_tensor
+        adj = torch.zeros((n_atoms, n_atoms), dtype=self.e.dtype)
+        adj[self.edge_idxs[:, 0], self.edge_idxs[:, 1]] = self.e
         
         # Get the upper-triangular indices
         upper_edge_idxs = torch.triu_indices(n_atoms, n_atoms, offset=1)
@@ -219,11 +221,11 @@ def rdmol_to_xace(molecule: Chem.rdchem.Mol, atom_map_dict: Dict[str, int], expl
         tcv_counts[tuple(row)] = count
 
     return MolXACE(
-        x=torch.from_numpy(positions).float(),
-        a=torch.from_numpy(atom_types).long(),
-        c=torch.from_numpy(atom_charges).long(),
-        e=torch.from_numpy(bond_types).long(),
-        edge_idxs=torch.from_numpy(bond_idxs).long(),
+        x=positions,
+        a=atom_types,
+        c=atom_charges,
+        e=bond_types,
+        edge_idxs=bond_idxs,
         tcv_counts=tcv_counts,
         rdkit_mol=molecule
     )

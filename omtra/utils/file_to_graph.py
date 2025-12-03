@@ -84,6 +84,7 @@ def load_ligand_rdkit(ligand_file: Path, compute_condensed: bool = False) -> Lig
     if failed:
         raise ValueError(f"Ligand featurization failed: {failures}")
     xace = valid_mols[0].sparse_to_dense()
+    xace.to_torch()
 
     atom_cond_a = None
     if compute_condensed:
