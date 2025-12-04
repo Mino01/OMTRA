@@ -54,9 +54,9 @@ The build script installs:
 - CUDA-enabled versions of PyTorch, DGL, and PyG
 - OMTRA package and all dependencies
 
-After installation, you can use the CLI directly:
+After installation, the `omtra` command will be available:
 ```bash
-python cli.py --task <task> [options]
+omtra --task <task> [options]
 ```
 
 ## Docker Installation
@@ -145,12 +145,10 @@ There are two ways to sample from a trained OMTRA model:
 ### Basic Usage
 
 ```bash
-# Manual installation
-python cli.py --task <task> [options]
-
-# Docker installation
 omtra --task <task> [options]
 ```
+
+The `omtra` command is available after either installation method. With manual installation, it's installed via `pip install -e .`. With Docker, the `docker-cli-setup.sh` script creates a shell function that wraps the Docker container.
 
 ### Core Arguments
 
@@ -174,19 +172,6 @@ For conditional generation tasks, you can provide input structures directly:
 | `--pharmacophore_file` | path | Pharmacophore constraints file (XYZ format) |
 
 When input files are provided, `--n_samples` specifies how many samples to generate for that single input system.
-
-### Dataset Arguments
-
-For sampling from a dataset (instead of user-provided files):
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--dataset` | string | pharmit | Dataset to sample from |
-| `--pharmit_path` | path | None | Path to Pharmit dataset |
-| `--plinder_path` | path | None | Path to Plinder dataset |
-| `--split` | string | val | Dataset split to use (train/val/test) |
-| `--dataset_start_idx` | int | 0 | Index to start sampling from in the dataset |
-| `--n_replicates` | int | 1 | Number of replicates per system when using datasets |
 
 ### Advanced Sampling Options
 
@@ -247,7 +232,7 @@ OMTRA supports multiple drug design tasks. Use the `--task` argument to select o
 
 ### Generate Novel Molecules (Unconditional)
 ```bash
-python cli.py --task denovo_ligand_condensed \
+omtra --task denovo_ligand_condensed \
   --n_samples 100 \
   --output_dir outputs/denovo_samples \
   --metrics
@@ -255,7 +240,7 @@ python cli.py --task denovo_ligand_condensed \
 
 ### Structure-Based Drug Design (Protein-Conditioned)
 ```bash
-python cli.py --task fixed_protein_ligand_denovo_condensed \
+omtra --task fixed_protein_ligand_denovo_condensed \
   --protein_file my_protein.pdb \
   --ligand_file reference_ligand.sdf \
   --n_samples 50 \
@@ -265,7 +250,7 @@ The reference ligand is used to define the binding site center. If omitted, the 
 
 ### Molecular Docking
 ```bash
-python cli.py --task rigid_docking_condensed \
+omtra --task rigid_docking_condensed \
   --protein_file protein.pdb \
   --ligand_file ligand.sdf \
   --n_samples 10 \
@@ -274,7 +259,7 @@ python cli.py --task rigid_docking_condensed \
 
 ### Conformer Generation
 ```bash
-python cli.py --task ligand_conformer_condensed \
+omtra --task ligand_conformer_condensed \
   --ligand_file molecule.sdf \
   --n_samples 20 \
   --output_dir outputs/conformers
@@ -282,26 +267,16 @@ python cli.py --task ligand_conformer_condensed \
 
 ### Pharmacophore-Guided Design
 ```bash
-python cli.py --task denovo_ligand_from_pharmacophore_condensed \
+omtra --task denovo_ligand_from_pharmacophore_condensed \
   --pharmacophore_file constraints.xyz \
   --n_samples 100 \
   --output_dir outputs/pharm_guided
 ```
 
-### Sample from Dataset
-```bash
-python cli.py --task fixed_protein_ligand_denovo_condensed \
-  --pharmit_path /path/to/pharmit/dataset \
-  --n_samples 10 \
-  --n_replicates 5 \
-  --split val \
-  --output_dir outputs/dataset_samples
-```
-
 ### Debug Mode
 Set the `OMTRA_DEBUG` environment variable for full stack traces:
 ```bash
-OMTRA_DEBUG=1 python cli.py --task denovo_ligand_condensed --n_samples 10
+OMTRA_DEBUG=1 omtra --task denovo_ligand_condensed --n_samples 10
 ```
 
 -----------------------------------------------------------------------------------------------------
