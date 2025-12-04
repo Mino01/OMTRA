@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import { JobStatus } from '@/types';
 import { Loader2, Download, ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import { MolecularViewer } from './MolecularViewer';
 import { MetricsTable } from './MetricsTable';
-import { InteractionDiagram2D, prefetchInteractionDiagram } from './InteractionDiagram2D';
+import { InteractionDiagram2D } from './InteractionDiagram2D';
 
 interface JobViewerProps {
   jobId: string;
@@ -17,7 +17,6 @@ interface JobViewerProps {
 export function JobViewer({ jobId, onBack }: JobViewerProps) {
   const [moleculeIndex, setMoleculeIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<'3d' | '2d'>('3d');
-  
 
   const { data: status, isLoading: statusLoading } = useQuery({
     queryKey: ['job-status', jobId],
@@ -35,32 +34,6 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
   });
 
   const isLoading = statusLoading || (status?.state === 'SUCCEEDED' && resultLoading);
-
-  // Background: once results exist, start PoseView (2D) generation for all samples,
-  // but do NOT block or sequence this before any 3D loading.
-  useEffect(() => {
-    if (!result) return;
-    const mode = result.params.sampling_mode;
-    if (mode !== 'Protein-conditioned' && mode !== 'Protein+Pharmacophore-conditioned') {
-      return;
-    }
-
-    const sdfFilesForPrefetch = result.artifacts
-      .filter((a) => a.filename.startsWith('sample_') && a.filename.endsWith('.sdf'))
-      .sort((a, b) => {
-        const numA = parseInt(a.filename.match(/\d+/)?.[0] || '0');
-        const numB = parseInt(b.filename.match(/\d+/)?.[0] || '0');
-        return numA - numB;
-      });
-
-    if (!sdfFilesForPrefetch.length) return;
-
-    sdfFilesForPrefetch.forEach((artifact) => {
-      prefetchInteractionDiagram(jobId, artifact.filename).catch(() => {
-        // Errors are cached and surfaced in the 2D component; ignore here
-      });
-    });
-  }, [jobId, result]);
 
   if (isLoading) {
     return (
@@ -178,14 +151,6 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
   }
 
   const currentFile = sdfFiles[Math.min(moleculeIndex, sdfFiles.length - 1)];
-  
-  console.log(`[JobViewer] Render: moleculeIndex=${moleculeIndex}, filename=${currentFile?.filename}, activeTab=${activeTab}`);
-  console.warn(`[JobViewer] WARN RENDER: moleculeIndex=${moleculeIndex}, filename=${currentFile?.filename}, activeTab=${activeTab}`);
-  
-  // Log when we're about to render InteractionDiagram2D
-  if (activeTab === '2d' && (result.params.sampling_mode === 'Protein-conditioned' || result.params.sampling_mode === 'Protein+Pharmacophore-conditioned')) {
-    console.warn(`[JobViewer] WARN: About to render InteractionDiagram2D with filename=${currentFile?.filename}, key=diagram-${jobId}-${currentFile?.filename}-${moleculeIndex}`);
-  } // Use warn so it's more visible
 
   const handleDownloadAll = async () => {
     try {
@@ -205,7 +170,7 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" style={{ width: '100%', minWidth: 0 }}>
       <button
         onClick={onBack}
         className="flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors"
@@ -214,10 +179,25 @@ export function JobViewer({ jobId, onBack }: JobViewerProps) {
         <span className="font-medium">Back to Jobs</span>
       </button>
 
-      <div className="border-b border-slate-200/60 pb-4">
-        <h2 className="text-2xl font-semibold text-slate-900 mb-2">
-          Job Details: {jobId.substring(0, 12)}...
-        </h2>
+      <div className="border-b border-slate-200/60 pb-4" style={{ width: '100%', minWidth: 0, overflow: 'visible' }}>
+        <div className="mb-2">
+          <h2 className="text-2xl font-semibold text-slate-900 inline-block mr-2">
+            Job Details:
+          </h2>
+          <span 
+            className="text-2xl font-semibold text-slate-900 align-middle" 
+            style={{ 
+              wordBreak: 'break-all', 
+              overflowWrap: 'anywhere', 
+              whiteSpace: 'normal',
+              display: 'inline-block',
+              maxWidth: '100%',
+              overflow: 'visible'
+            }}
+          >
+            {jobId}
+          </span>
+        </div>
         <div className="text-sm text-slate-600">
           {result.params.sampling_mode} • {result.params.n_samples} samples •{' '}
           {result.params.steps} steps

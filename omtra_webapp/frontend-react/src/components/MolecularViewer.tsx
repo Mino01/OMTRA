@@ -78,46 +78,6 @@ export function MolecularViewer({ jobId, filename, samplingMode }: MolecularView
         return;
       }
 
-      // Determine whether we need protein / pharmacophore data
-      const needsProtein =
-        samplingMode === 'Protein-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned';
-      const needsPharmacophore =
-        samplingMode === 'Pharmacophore-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned';
-      // Ensure protein/pharmacophore data is loaded once
-      const ensureProteinData = async () => {
-        if (!needsProtein || proteinDataRef.current) return;
-        const inputFiles = await apiClient.listInputFiles(jobId);
-        const protFile = inputFiles.files.find(
-          (f) => f.extension === '.pdb' || f.extension === '.cif'
-        );
-        if (!protFile) return;
-        const protBlob = await apiClient.downloadInputFile(jobId, protFile.filename);
-        const protContent = await protBlob.text();
-        const protFormat = protFile.extension === '.pdb' ? 'pdb' : 'cif';
-        proteinDataRef.current = { content: protContent, format: protFormat };
-      };
-
-      const ensurePharmacophoreData = async () => {
-        if (!needsPharmacophore || pharmacophoreAtomsRef.current) return;
-        const inputFiles = await apiClient.listInputFiles(jobId);
-        const xyzFile = inputFiles.files.find((f) => f.extension === '.xyz');
-        if (!xyzFile) return;
-        const xyzBlob = await apiClient.downloadInputFile(jobId, xyzFile.filename);
-        const xyzContent = await xyzBlob.text();
-        pharmacophoreAtomsRef.current = parsePharmacophoreXyz(xyzContent);
-      };
-
-      await Promise.all([
-        ensureProteinData().catch((err) => console.error('Failed to ensure protein data:', err)),
-        ensurePharmacophoreData().catch((err) => console.error('Failed to ensure pharmacophore data:', err)),
-      ]);
-
-      const hasProtein = !!proteinDataRef.current;
-      const hasPharmacophore = !!pharmacophoreAtomsRef.current;
-      const isFirstLoad = !hasBuiltSceneRef.current;
-
-      console.log('MolecularViewer load:', { isFirstLoad, hasProtein, hasPharmacophore, filename });
-
       const viewerAny = viewer as any;
 
       const safeGetCamera = () => {
@@ -174,61 +134,99 @@ export function MolecularViewer({ jobId, filename, samplingMode }: MolecularView
         }
       };
 
-      const ensureProteinModel = () => {
-        if (!proteinDataRef.current || viewerAny._proteinModel) return;
-        const proteinModel = viewer.addModel(
-          proteinDataRef.current.content,
-          proteinDataRef.current.format
-        );
-        viewer.setStyle({ model: proteinModel }, { cartoon: { color: 'lightblue' } });
-        viewerAny._proteinModel = proteinModel;
-      };
+      const camera = safeGetCamera();
+      removeExistingLigandModel();
 
-      const ensurePharmacophoreShapes = () => {
-        if (!pharmacophoreAtomsRef.current || viewerAny._pharmacophoreShapes) return;
-        viewerAny._pharmacophoreShapes = addPharmacophoreAtoms(
-          viewer,
-          pharmacophoreAtomsRef.current
-        );
-      };
+      const fileFormat = filename.split('.').pop()?.toLowerCase() || 'sdf';
+      const ligandModel = viewer.addModel(fileContent, fileFormat);
+      viewer.setStyle({ model: ligandModel }, { stick: { radius: 0.15 } });
+      viewerAny._ligandModel = ligandModel;
 
-      const rebuildProteinSurface = (ligandModel: any) => {
-        if (!viewerAny._proteinModel || viewerAny._proteinSurface) return;
+      safeSetCamera(camera, ligandModel);
+      viewer.render();
+      hasBuiltSceneRef.current = true;
 
+      // Load protein/pharmacophore in the background
+      const needsProtein =
+        samplingMode === 'Protein-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned';
+      const needsPharmacophore =
+        samplingMode === 'Pharmacophore-conditioned' || samplingMode === 'Protein+Pharmacophore-conditioned';
+
+      const loadAndAddProtein = async () => {
+        if (!needsProtein || proteinDataRef.current) return;
         try {
-          const surface = viewer.addSurface(
-            window.$3Dmol.VDW,
-            { opacity: 0.6, colorscheme: 'whiteCarbon' },
-            {
-              model: viewerAny._proteinModel,
-              within: { distance: 6.0, sel: { model: ligandModel } },
-            }
+          const inputFiles = await apiClient.listInputFiles(jobId);
+          const protFile = inputFiles.files.find(
+            (f) => f.extension === '.pdb' || f.extension === '.cif'
           );
-          viewerAny._proteinSurface = surface;
+          if (!protFile) return;
+          const protBlob = await apiClient.downloadInputFile(jobId, protFile.filename);
+          const protContent = await protBlob.text();
+          const protFormat = protFile.extension === '.pdb' ? 'pdb' : 'cif';
+          proteinDataRef.current = { content: protContent, format: protFormat };
+
+          // Add protein to scene
+          if (viewerRef.current && !viewerAny._proteinModel) {
+            const proteinModel = viewerRef.current.addModel(
+              proteinDataRef.current.content,
+              proteinDataRef.current.format
+            );
+            viewerRef.current.setStyle({ model: proteinModel }, { cartoon: { color: 'lightblue' } });
+            viewerAny._proteinModel = proteinModel;
+
+            // Add surface if ligand exists
+            if (viewerAny._ligandModel && !viewerAny._proteinSurface) {
+              try {
+                const surface = viewerRef.current.addSurface(
+                  window.$3Dmol.VDW,
+                  { opacity: 0.6, colorscheme: 'whiteCarbon' },
+                  {
+                    model: proteinModel,
+                    within: { distance: 6.0, sel: { model: viewerAny._ligandModel } },
+                  }
+                );
+                viewerAny._proteinSurface = surface;
+              } catch (err) {
+                console.error('Failed to add protein surface:', err);
+              }
+            }
+            viewerRef.current.render();
+          }
         } catch (err) {
-          console.error('Failed to add protein surface:', err);
+          console.error('Failed to load protein data:', err);
         }
       };
 
-      const updateScene = () => {
-        const camera = safeGetCamera();
-        removeExistingLigandModel();
+      const loadAndAddPharmacophore = async () => {
+        if (!needsPharmacophore || pharmacophoreAtomsRef.current) return;
+        try {
+          const inputFiles = await apiClient.listInputFiles(jobId);
+          const xyzFile = inputFiles.files.find((f) => f.extension === '.xyz');
+          if (!xyzFile) return;
+          const xyzBlob = await apiClient.downloadInputFile(jobId, xyzFile.filename);
+          const xyzContent = await xyzBlob.text();
+          pharmacophoreAtomsRef.current = parsePharmacophoreXyz(xyzContent);
 
-        const fileFormat = filename.split('.').pop()?.toLowerCase() || 'sdf';
-        const ligandModel = viewer.addModel(fileContent, fileFormat);
-        viewer.setStyle({ model: ligandModel }, { stick: { radius: 0.15 } });
-        viewerAny._ligandModel = ligandModel;
-
-        ensureProteinModel();
-        ensurePharmacophoreShapes();
-        rebuildProteinSurface(ligandModel);
-
-        safeSetCamera(camera, ligandModel);
-        viewer.render();
-        hasBuiltSceneRef.current = true;
+          // Add pharmacophore to scene
+          if (viewerRef.current && !viewerAny._pharmacophoreShapes) {
+            viewerAny._pharmacophoreShapes = addPharmacophoreAtoms(
+              viewerRef.current,
+              pharmacophoreAtomsRef.current
+            );
+            viewerRef.current.render();
+          }
+        } catch (err) {
+          console.error('Failed to load pharmacophore data:', err);
+        }
       };
 
-      updateScene();
+      // Load protein/pharmacophore in parallel
+      Promise.all([
+        loadAndAddProtein(),
+        loadAndAddPharmacophore(),
+      ]).catch((err) => {
+        console.error('Error loading protein/pharmacophore:', err);
+      });
     };
 
     if (!isLoading && fileContent) {
@@ -257,14 +255,6 @@ export function MolecularViewer({ jobId, filename, samplingMode }: MolecularView
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-gray-500">Loading molecule...</div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -280,7 +270,13 @@ export function MolecularViewer({ jobId, filename, samplingMode }: MolecularView
         ref={containerRef}
         style={{ width: '100%', height: '500px', position: 'relative' }}
         className="three-d-viewer-container border border-gray-300 rounded-lg overflow-hidden"
-      />
+      >
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/80">
+            <div className="text-gray-500">Loading molecule...</div>
+          </div>
+        )}
+      </div>
       {(samplingMode === 'Pharmacophore-conditioned' ||
         samplingMode === 'Protein+Pharmacophore-conditioned') && (
         <div className="mt-4 p-4 bg-gray-50 rounded-lg">
