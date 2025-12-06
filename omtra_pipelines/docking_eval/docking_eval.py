@@ -11,6 +11,8 @@ import dgl
 import gc
 import multiprocessing as mp
 import tempfile
+import sys
+import time
 from collections import defaultdict
 from scipy.spatial.distance import cdist
 from natsort import natsorted
@@ -36,6 +38,9 @@ from omtra.constants import ph_idx_to_elem
 
 def parse_args():
     p = argparse.ArgumentParser(description='Evaluate ligand poses')
+
+    # option for early exit
+    p.add_argument('--exit_if_done', action='store_true', help="Stop execution if the output metric file already exists.")
 
     # --- Mutually exclusive group inside IO ---
     io = p.add_argument_group("Input/Output Options")
@@ -608,13 +613,13 @@ def sample_system(ckpt_path: Path,
         sys_info['lig_id'] = sys_info['lig_sdf'].apply(lambda x: Path(Path(x).stem).stem)
 
         # sort systems
-        sorted_idx = natsorted(sys_info.index, key=lambda i: sys_info.loc[i, "lig_id"])
-        sys_info = sys_info.iloc[sorted_idx].reset_index(drop=True)
+        # sorted_idx = natsorted(sys_info.index, key=lambda i: sys_info.loc[i, "lig_id"])
+        # sys_info = sys_info.iloc[sorted_idx].reset_index(drop=True)
         sys_info.loc[:, 'sys_id'] = [f"sys_{idx}_gt" for idx in range(sys_info.shape[0])]
         
         # sort dataset indices to match sys_info
-        dataset_idxs = list(dataset_idxs)
-        dataset_idxs = [dataset_idxs[i] for i in sorted_idx]
+        # dataset_idxs = list(dataset_idxs)
+        # dataset_idxs = [dataset_idxs[i] for i in sorted_idx]
 
     elif dataset == 'pharmit':
         raise ValueError(f"Pharmit dataset does not include proteins!")
@@ -897,6 +902,18 @@ def system_pairs_from_path(samples_dir: Path,
 
     return system_pairs
 
+def get_device_properties_with_retry(dev_idx=0, retries=5, delay=5):
+    """Get CUDA device properties with retries."""
+    last_err = None
+    for i in range(retries):
+        try:
+            return torch.cuda.get_device_properties(dev_idx)
+        except Exception as e:
+            last_err = e
+            print(f"[WARN] CUDA init failed (attempt {i+1}/{retries}): {e}")
+            time.sleep(delay)
+    raise RuntimeError(f"Failed to init CUDA after {retries} retries") from last_err
+
 def main(args):
     task_name: str = args.task
     task: Task = task_name_to_class(task_name)
@@ -913,6 +930,12 @@ def main(args):
             output_dir = args.output_dir 
         output_dir.mkdir(parents=True, exist_ok=True, mode=0o777)
 
+        metrics_file = output_dir / "eval_metrics.csv"
+        if metrics_file.exists() and args.exit_if_done:
+            print('output file already exists, exiting')
+            print(f'output file of interest: {metrics_file}')
+            sys.exit()
+
         # Additional keyword arguments for special types of sampling
         kwargs = {'stochastic_sampling': args.stochastic_sampling,
                   'noise_scaler': args.noise_scaler,
@@ -920,7 +943,9 @@ def main(args):
                   'n_lig_atom_margin': args.n_lig_atom_margin}
         
         if args.bs_per_gbmem is not None:
-            gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  # in GB
+            # gpu_mem_available = torch.cuda.get_device_properties(0).total_memory // (1024**3)  
+            props = get_device_properties_with_retry(0)
+            gpu_mem_available = props.total_memory // (1024**3) # in GB
             max_batch_size = int(gpu_mem_available * args.bs_per_gbmem)
             max_batch_size = max(1, max_batch_size)  # ensure at least batch size of 1
             print(f"Setting max_batch_size to {max_batch_size} based on available GPU memory.")
@@ -962,6 +987,12 @@ def main(args):
         samples_dir = args.samples_dir
         output_dir = args.output_dir or samples_dir
         output_dir.mkdir(parents=True, exist_ok=True, mode=0o777)
+
+        metrics_file = output_dir / "eval_metrics.csv"
+        if metrics_file.exists() and args.exit_if_done:
+            print('output file already exists, exiting')
+            print(f'output file of interest: {metrics_file}')
+            sys.exit()
 
         if args.sys_info_file is None:
             sys_info_file =  f"{samples_dir}/sys_info.csv"
