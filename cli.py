@@ -146,7 +146,7 @@ def create_parser():
         "--pharmacophore_file",
         type=Path, 
         default=None,
-        help="Path to pharmacophore file (XYZ format) for pharmacophore-conditioned tasks"
+        help="Path to pharmacophore file (XYZ format) for pharmacophore-conditioned tasks. If not provided, pharmacophores will be extracted from --ligand_file if available."
     )
     return parser
 
@@ -172,8 +172,8 @@ def _validate_task_inputs(args, task, has_protein, has_ligand, has_pharmacophore
         missing.append("ligand file (--ligand_file)")
     if 'ligand_identity_condensed' in required and not has_ligand:
         missing.append("ligand file (--ligand_file)")
-    if 'pharmacophore' in required and not has_pharmacophore:
-        missing.append("pharmacophore file (--pharmacophore_file)")
+    if 'pharmacophore' in required and not has_pharmacophore and not has_ligand:
+        missing.append("pharmacophore file (--pharmacophore_file) or ligand file (--ligand_file)")
     
     has_dataset_path = args.pharmit_path is not None or args.plinder_path is not None
     

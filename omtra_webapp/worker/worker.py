@@ -605,8 +605,11 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
             mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=False)
             metrics['n_connected_components'] = len(mol_frags)
             metrics['is_connected'] = (len(mol_frags) == 1)
-            
-            # Try to sanitize 
+        except Exception:
+            metrics['n_connected_components'] = 0
+            metrics['is_connected'] = False
+        
+        try:
             Chem.SanitizeMol(mol)
             sanitized_ok = True
             
@@ -645,11 +648,12 @@ def compute_fast_molecule_metrics(mol, sample_name=None, sampling_mode=None, pro
         except Exception:
             pass
         
-        # Disconnected molecules should fail pb_valid?
-
-        if not metrics.get('is_connected', True):
+        if not metrics.get('is_connected', False):
             metrics['pb_valid'] = False
-            metrics['pb_failing_checks'] = ['connectivity'] 
+            if metrics.get('pb_failing_checks') is None:
+                metrics['pb_failing_checks'] = ['connectivity']
+            elif 'connectivity' not in metrics['pb_failing_checks']:
+                metrics['pb_failing_checks'].append('connectivity') 
         
         # If a protein file is available, compute pb_valid for any task
         if protein_file and Path(protein_file).exists():
@@ -1092,7 +1096,7 @@ def run_omtra_sampler(
                         if not pharmacophores:
                             raise ValueError("No pharmacophore features extracted from SDF file")
                         
-                        center_coords = (sampling_mode != 'Protein+Pharmacophore-conditioned')
+                        center_coords = True
                         xyz_content = pharmacophore_list_to_xyz(pharmacophores, selected_indices=None, center=center_coords)
                         
                         # Save to temporary XYZ file
@@ -1131,6 +1135,11 @@ def run_omtra_sampler(
                         raise ValueError("No reference ligand file (.sdf) found for Protein-conditioned sampling. A ligand file is required to identify the binding pocket.")
 
                     args.n_samples = n_samples  # CLI will convert this to n_replicates and set n_samples=1
+                elif sampling_mode == 'Protein+Pharmacophore-conditioned':
+                    sdf_files = list(temp_input_dir.glob('*.sdf'))
+                    if sdf_files:
+                        args.ligand_file = sdf_files[0]
+                        job_logger.info(f"Using SDF file {sdf_files[0].name} to define binding pocket from ligand atoms")
                 
                 # Keep exact same protein path for downstream metrics to avoid any alignment/file differences
                 chosen_prot_for_metrics = str(chosen_prot)

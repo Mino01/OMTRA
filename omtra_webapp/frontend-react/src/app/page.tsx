@@ -69,8 +69,7 @@ export default function HomePage() {
             <div className="flex-1 text-sm text-amber-900">
               <p className="font-medium mb-1">Disclaimer</p>
               <p className="text-amber-800/90"> 
-                This is a proof of concept server for demonstration purposes. 
-                All results are public, and jobs are automatically removed after 48 hours.
+                This web app is a work in progress.
                 For issues, feature requests, or to contribute, please visit our{' '}
                 <a 
                   href="https://github.com/gnina/OMTRA" 
