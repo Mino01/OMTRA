@@ -1,22 +1,18 @@
 #!/bin/bash
 # Setup script to enable running 'omtra' CLI commands via Docker
 
-# Default image name
-OMTRA_CLI_IMAGE="${OMTRA_CLI_IMAGE:-omtra/cli:latest}"
+# Default image name (pulls from Docker Hub)
+OMTRA_CLI_IMAGE="${OMTRA_CLI_IMAGE:-gnina/omtra:latest}"
 
 
 omtra() {
     local IMAGE_NAME="${OMTRA_CLI_IMAGE}"
     local GPU_FLAG=""
     
-    # Check if image exists locally, if not try to build it
+    # Check if image exists locally, if not pull from Docker Hub
     if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
-        echo "Image ${IMAGE_NAME} not found locally. Attempting to pull from registry..."
-        if ! docker pull "${IMAGE_NAME}" 2>/dev/null; then
-            echo "Image not found in registry. Building locally..."
-            local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-            docker build -f "${SCRIPT_DIR}/Dockerfile" -t "${IMAGE_NAME}" "${SCRIPT_DIR}"
-        fi
+        echo "Image ${IMAGE_NAME} not found locally. Pulling from Docker Hub..."
+        docker pull "${IMAGE_NAME}"
     fi
     
     # GPU support (set OMTRA_NO_GPU=1 to disable)
