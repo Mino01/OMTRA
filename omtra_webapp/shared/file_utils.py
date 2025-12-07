@@ -181,7 +181,9 @@ def validate_molecular_format(filename: str, content: bytes) -> None:
                 
         elif ext == '.cif':
             # Basic CIF validation
-            if not text_content.strip().startswith('data_'):
+            lines = text_content.split('\n')
+            has_data_block = any(line.strip().startswith('data_') for line in lines)
+            if not has_data_block:
                 raise ValueError("Invalid CIF format - missing data block")
                 
         elif ext == '.xyz':
